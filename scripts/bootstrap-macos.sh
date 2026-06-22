@@ -13,13 +13,25 @@ if ! command -v brew >/dev/null 2>&1; then
   exit 1
 fi
 
+# Avoid upgrading unrelated packages during project bootstrap.
+export HOMEBREW_NO_AUTO_UPDATE=1
+export HOMEBREW_BUNDLE_NO_UPGRADE=1
+
+# Required by this repository.
 brew tap hashicorp/tap
 
 if brew help trust >/dev/null 2>&1; then
-  brew trust hashicorp/tap || true
+  brew trust hashicorp/tap
+
+  # Compatibility for Macs that already have MongoDB Database Tools
+  # installed from this external tap. This is not an OpenRevive dependency.
+  if brew tap | grep -Fxq "mongodb/brew"; then
+    brew trust --formula mongodb/brew/mongodb-database-tools || true
+  fi
 fi
 
-brew bundle --file="$PROJECT_ROOT/Brewfile"
+echo "Installing missing OpenRevive developer tools..."
+brew bundle install --file="$PROJECT_ROOT/Brewfile" --no-upgrade
 
 if [[ ! -f "$PROJECT_ROOT/.env" ]]; then
   cp "$PROJECT_ROOT/.env.example" "$PROJECT_ROOT/.env"
