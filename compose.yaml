@@ -63,7 +63,58 @@ services:
         mc anonymous set none local/${S3_BUCKET}
         echo "MinIO bucket is ready."
 
+  api:
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+    working_dir: /workspace/services/api
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    command: >
+      sh -c "uv sync --frozen --no-install-project &&
+      uv run --frozen fastapi dev app/main.py --host 0.0.0.0 --port 8000"
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./services/api:/workspace/services/api
+      - api_venv:/workspace/services/api/.venv
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2).read()",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  web:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+    working_dir: /workspace
+    environment:
+      API_INTERNAL_URL: http://api:8000
+    command: >
+      sh -c "pnpm install --frozen-lockfile &&
+      pnpm dev --hostname 0.0.0.0 --port 3000"
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./apps/web:/workspace
+      - web_node_modules:/workspace/node_modules
+    depends_on:
+      api:
+        condition: service_healthy
+
 volumes:
   postgres_data:
   redis_data:
   minio_data:
+  api_venv:
+  web_node_modules:

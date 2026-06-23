@@ -1,25 +1,25 @@
 SHELL := /bin/bash
 COMPOSE := docker compose
 
-.PHONY: setup infra-up infra-down infra-reset infra-logs verify
+.PHONY: setup dev-up dev-down dev-reset dev-logs dev-ps verify
 
 setup:
 	./scripts/bootstrap-macos.sh
-	$(MAKE) infra-up
 
-infra-up:
-	$(COMPOSE) up -d postgres redis minio
-	$(COMPOSE) run --rm minio-init
-	$(COMPOSE) ps
+dev-up:
+	$(COMPOSE) up --build
 
-infra-down:
+dev-down:
 	$(COMPOSE) down
 
-infra-reset:
+dev-reset:
 	$(COMPOSE) down -v --remove-orphans
 
-infra-logs:
+dev-logs:
 	$(COMPOSE) logs -f --tail=200
+
+dev-ps:
+	$(COMPOSE) ps
 
 verify:
 	./scripts/verify-dev-env.sh

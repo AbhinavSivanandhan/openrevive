@@ -146,3 +146,12 @@ Then verify:
 ```bash
 uv --version
 ```
+
+## Run the web app
+
+Start the API first if you want the full local stack.
+
+```bash
+# Terminal 1
+cd services/api
+uv run fastapi dev app/main.py --port 8000
