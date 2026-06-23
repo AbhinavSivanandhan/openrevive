@@ -1,5 +1,24 @@
 # Developer Setup
 
+## Purpose
+
+OpenRevive is a monorepo with independently deployable application services:
+
+```text
+apps/web        Next.js frontend
+services/api    FastAPI API
+```
+
+For local development, Docker Compose runs the full application stack:
+
+```text
+web → api → postgres
+          ↘ redis
+          ↘ minio
+```
+
+The frontend and API run in containers with source-code bind mounts, so normal edits reload during development.
+
 ## Requirements
 
 * macOS
@@ -7,7 +26,9 @@
 * Docker Desktop installed and running
 * Git access to this repository
 
-## Quick start
+The bootstrap script installs the local developer tools declared in `Brewfile`, including Docker tooling, `uv`, Node.js, pnpm, Terraform, and supporting utilities.
+
+## First-time setup
 
 ```bash
 git clone <repository-url>
@@ -15,143 +36,198 @@ cd openrevive
 make setup
 ```
 
-`make setup` installs declared developer tools through Homebrew, creates a local `.env` file, and starts PostgreSQL, Redis, and MinIO.
+`make setup`:
 
-Verify the local environment:
+* runs `scripts/bootstrap-macos.sh`;
+* installs declared developer tools through Homebrew;
+* creates `.env` from `.env.example` when `.env` does not exist.
+
+Do not commit `.env`. It contains local credentials and may later contain provider API keys.
+
+Verify the local toolchain:
 
 ```bash
 make verify
-docker compose ps
 ```
 
-## Local services
-
-| Service               | Purpose                                 | Address                 |
-| --------------------- | --------------------------------------- | ----------------------- |
-| PostgreSQL + pgvector | Product data, search, future embeddings | `localhost:5432`        |
-| Redis                 | Background job broker and cache         | `localhost:6379`        |
-| MinIO                 | Local S3-compatible file storage        | `localhost:9000`        |
-| MinIO Console         | Inspect local uploaded files            | `http://localhost:9001` |
-
-## Local environment variables
-
-The first setup creates `.env` from `.env.example`.
-
-Do not commit `.env`. It contains local credentials and may later contain API keys.
-
-## Common commands
+## Start the local stack
 
 ```bash
-make infra-up       # Start local PostgreSQL, Redis, and MinIO
-make infra-down     # Stop local services but preserve data
-make infra-reset    # Stop local services and delete local volumes/data
-make infra-logs     # Stream local service logs
-make verify         # Verify tools and local dependencies
+make dev-up
 ```
 
-## Resetting local data
+This builds and starts:
 
-Use this only when local data can be safely deleted:
+| Service               | Purpose                                 | Local address                |
+| --------------------- | --------------------------------------- | ---------------------------- |
+| Next.js web           | Product UI                              | `http://localhost:3000`      |
+| FastAPI API           | Product API                             | `http://localhost:8000`      |
+| FastAPI docs          | OpenAPI / Swagger UI                    | `http://localhost:8000/docs` |
+| PostgreSQL + pgvector | Product data, search, future embeddings | `localhost:5432`             |
+| Redis                 | Future job queue and cache              | `localhost:6379`             |
+| MinIO                 | Local S3-compatible object storage      | `http://localhost:9000`      |
+| MinIO Console         | Inspect local object storage            | `http://localhost:9001`      |
+
+`make dev-up` runs Compose in the foreground and streams logs. Stop it with `Ctrl+C`.
+
+## Verify the stack
+
+Open a second terminal:
 
 ```bash
-make infra-reset
-make infra-up
+cd openrevive
+
+make dev-ps
+
+curl -i http://localhost:8000/health
+curl -i http://localhost:8000/health/ready
+curl -i http://localhost:3000/api/health/ready
 ```
+
+All three requests should return `200 OK`.
+
+These checks prove:
+
+```text
+localhost:8000/health
+→ API container is reachable from the host.
+
+localhost:8000/health/ready
+→ API container can connect to PostgreSQL.
+
+localhost:3000/api/health/ready
+→ Next.js proxies browser-facing API requests to the API container.
+```
+
+## Daily commands
+
+```bash
+make dev-up      # build and start the full local stack
+make dev-down    # stop containers; preserve local data volumes
+make dev-reset   # stop containers and delete all local Docker data
+make dev-logs    # follow logs from all services
+make dev-ps      # show running services
+make verify      # verify local developer tooling
+```
+
+Use `make dev-reset` only when local data can safely be discarded.
+
+## Development reload behavior
+
+The application source is bind-mounted into its containers.
+
+* Editing files under `apps/web` triggers Next.js development reload.
+* Editing files under `services/api` triggers FastAPI development reload.
+* Re-run `make dev-up` after changing dependencies, Dockerfiles, Compose configuration, or service-level environment variables.
+
+## Environment variables
+
+The root `.env` file configures local infrastructure and host-side tools.
+
+The API container overrides its database hostname internally:
+
+```text
+Host-side database URL: localhost:5432
+Container-side database URL: postgres:5432
+```
+
+Inside Docker Compose, service names are network hostnames:
+
+```text
+postgres
+redis
+minio
+api
+web
+```
+
+`localhost` inside a container means that same container, not your Mac and not another Compose service.
+
+## PostgreSQL initialization behavior
+
+These variables are used only when Postgres initializes a fresh data volume:
+
+```text
+POSTGRES_DB
+POSTGRES_USER
+POSTGRES_PASSWORD
+```
+
+Changing them in `.env` does not modify an existing database volume.
+
+For a disposable local reset:
+
+```bash
+make dev-reset
+make dev-up
+```
+
+Do not use this against data you need to preserve.
+
+## Frontend structure
+
+The frontend is self-contained:
+
+```text
+apps/web/
+├─ app/
+├─ public/
+├─ package.json
+├─ pnpm-lock.yaml
+├─ pnpm-workspace.yaml
+├─ next.config.ts
+└─ Dockerfile
+```
+
+The frontend Docker build context is `apps/web` only.
+
+`pnpm-workspace.yaml` in `apps/web` stores the approved build-script policy for required frontend dependencies. `pnpm-lock.yaml` records the exact frontend dependency graph.
+
+## API structure
+
+```text
+services/api/
+├─ app/
+├─ pyproject.toml
+├─ uv.lock
+└─ Dockerfile
+```
+
+The API uses Python 3.14, FastAPI, SQLAlchemy async support, asyncpg, and pydantic-settings.
 
 ## Troubleshooting
 
-If Docker is not available:
+### Docker is unavailable
 
 ```bash
 open -a Docker
 docker info
 ```
 
-If a local port is already in use, identify the process:
+### A required local port is already occupied
 
 ```bash
+lsof -nP -iTCP:3000 -sTCP:LISTEN
 lsof -nP -iTCP:5432 -sTCP:LISTEN
 lsof -nP -iTCP:6379 -sTCP:LISTEN
+lsof -nP -iTCP:8000 -sTCP:LISTEN
 lsof -nP -iTCP:9000 -sTCP:LISTEN
 ```
 
-# random note
-minio-init does not appear in docker compose ps because it runs once, creates the bucket, and exits.
-
-## Application services
-
-Application services currently run from the host machine during development. Local dependencies run through Docker Compose.
-
-| Service          | Purpose                                                 | Address                      |
-| ---------------- | ------------------------------------------------------- | ---------------------------- |
-| FastAPI API      | Product API and future background-command control plane | `http://localhost:8000`      |
-| FastAPI API docs | Interactive OpenAPI / Swagger documentation             | `http://localhost:8000/docs` |
-| Next.js web app  | Product user interface                                  | `http://localhost:3000`      |
-
-## Run the FastAPI API
-
-Ensure local infrastructure is running first:
+### View service logs
 
 ```bash
-make infra-up
+make dev-logs
 ```
 
-Start the API from a separate terminal:
+Or inspect one service:
 
 ```bash
-cd services/api
-uv run fastapi dev app/main.py --port 8000
+docker compose logs -f --tail=200 api
+docker compose logs -f --tail=200 web
+docker compose logs -f --tail=200 postgres
 ```
 
-Verify it:
+### MinIO initialization
 
-```bash
-curl http://localhost:8000/health
-```
-
-Expected response:
-
-```json
-{"status":"ok"}
-```
-
-Stop the API with:
-
-```text
-Ctrl+C
-```
-
-## Current local startup sequence
-
-```bash
-git clone <repository-url>
-cd openrevive
-make setup
-make infra-up
-
-# Terminal 1
-cd services/api
-uv run fastapi dev app/main.py --port 8000
-```
-### `uv: command not found`
-
-Run the project bootstrap again:
-
-```bash
-./scripts/bootstrap-macos.sh
-```
-
-Then verify:
-
-```bash
-uv --version
-```
-
-## Run the web app
-
-Start the API first if you want the full local stack.
-
-```bash
-# Terminal 1
-cd services/api
-uv run fastapi dev app/main.py --port 8000
+`minio-init` is a one-shot Compose service. It creates the local bucket and exits, so it does not normally appear in `docker compose ps`.
