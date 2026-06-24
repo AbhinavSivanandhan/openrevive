@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, status
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.api.routers.workspaces import router as workspaces_router
 from app.db.session import check_database, close_database, wait_for_database
 
 
@@ -18,6 +19,8 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+app.include_router(workspaces_router)
 
 
 @app.get("/health")
