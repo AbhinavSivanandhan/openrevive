@@ -1,6 +1,13 @@
-from fastapi.testclient import TestClient
+import asyncio
+from uuid import UUID
 
+from fastapi.testclient import TestClient
+from sqlalchemy import select
+
+from app.db.session import session_factory
 from app.main import app
+from app.models.crawled_document import CrawledDocument
+from app.models.crawl_job import CrawlJob
 
 
 def create_workspace(client: TestClient, name: str = "Crawler Research") -> dict:
@@ -106,3 +113,95 @@ def test_start_crawl_run_rejects_a_seed_outside_allowed_domains() -> None:
         )
 
     assert response.status_code == 422
+
+
+async def add_document_for_crawl_run(
+    crawl_run_id: str,
+) -> None:
+    async with session_factory() as session:
+        job = await session.scalar(
+            select(CrawlJob)
+            .where(
+                CrawlJob.crawl_run_id == UUID(crawl_run_id)
+            )
+            .order_by(CrawlJob.created_at)
+        )
+
+        assert job is not None
+
+        job.status = "SUCCEEDED"
+
+        session.add(
+            CrawledDocument(
+                crawl_job_id=job.id,
+                raw_object_key=(
+                    f"crawl-runs/{crawl_run_id}/"
+                    f"jobs/{job.id}/raw.html"
+                ),
+                content_type="text/html",
+                content_sha256="a" * 64,
+                title="OpenRevive test page",
+                extracted_text=(
+                    "A persisted crawled document "
+                    "for the dashboard."
+                ),
+            )
+        )
+
+        await session.commit()
+
+
+def test_crawl_run_detail_and_documents_reads() -> None:
+    with TestClient(app) as client:
+        collection = create_collection(client)
+
+        create_response = client.post(
+            f"/v1/collections/{collection['id']}/crawl-runs",
+            headers={
+                "Idempotency-Key": "crawler-read-api-001",
+            },
+            json=crawl_request_payload(),
+        )
+
+    assert create_response.status_code == 201
+
+    crawl_run = create_response.json()
+    asyncio.run(
+        add_document_for_crawl_run(crawl_run["id"])
+    )
+
+    with TestClient(app) as client:
+        detail_response = client.get(
+            f"/v1/collections/{collection['id']}/"
+            f"crawl-runs/{crawl_run['id']}"
+        )
+        documents_response = client.get(
+            f"/v1/collections/{collection['id']}/"
+            f"crawl-runs/{crawl_run['id']}/documents"
+        )
+
+    assert detail_response.status_code == 200
+
+    detail = detail_response.json()
+    assert detail["id"] == crawl_run["id"]
+    assert detail["collection_id"] == collection["id"]
+    assert detail["job_counts"]["PENDING"] == 1
+    assert detail["job_counts"]["SUCCEEDED"] == 1
+    assert detail["job_counts"]["TOTAL"] == 2
+
+    assert documents_response.status_code == 200
+
+    documents = documents_response.json()
+    assert documents["total"] == 1
+    assert len(documents["items"]) == 1
+
+    document = documents["items"][0]
+    assert document["title"] == "OpenRevive test page"
+    assert document["source_url"] == (
+        "https://docs.example.com/start"
+    )
+    assert document["extracted_text_preview"] == (
+        "A persisted crawled document "
+        "for the dashboard."
+    )
+    assert document["raw_object_key"].endswith("/raw.html")

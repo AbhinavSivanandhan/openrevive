@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db_session
 from app.models.collection import Collection
+from app.models.crawled_document import CrawledDocument
 from app.models.crawl_job import CrawlJob
 from app.models.crawl_run import CrawlRun
 
@@ -52,6 +53,30 @@ class CrawlRunResponse(BaseModel):
     max_attempts: int
     queued_job_count: int
     created_at: datetime
+
+
+class CrawlRunDetailResponse(BaseModel):
+    id: UUID
+    collection_id: UUID
+    status: str
+    job_counts: dict[str, int]
+    created_at: datetime
+
+
+class CrawledDocumentResponse(BaseModel):
+    id: UUID
+    crawl_job_id: UUID
+    source_url: str
+    title: str | None
+    extracted_text_preview: str | None
+    raw_object_key: str
+    content_type: str
+    created_at: datetime
+
+
+class CrawledDocumentListResponse(BaseModel):
+    total: int
+    items: list[CrawledDocumentResponse]
 
 
 def normalize_allowed_domain(value: str) -> str:
@@ -174,6 +199,130 @@ async def to_response(
         max_attempts=crawl_run.max_attempts,
         queued_job_count=await queued_job_count(session, crawl_run.id),
         created_at=crawl_run.created_at,
+    )
+
+
+async def get_crawl_run_for_collection(
+    session: AsyncSession,
+    *,
+    collection_id: UUID,
+    crawl_run_id: UUID,
+) -> CrawlRun:
+    crawl_run = await session.scalar(
+        select(CrawlRun).where(
+            CrawlRun.id == crawl_run_id,
+            CrawlRun.collection_id == collection_id,
+        )
+    )
+
+    if crawl_run is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="crawl run not found",
+        )
+
+    return crawl_run
+
+
+async def get_job_counts(
+    session: AsyncSession,
+    crawl_run_id: UUID,
+) -> dict[str, int]:
+    rows = (
+        await session.execute(
+            select(
+                CrawlJob.status,
+                func.count(),
+            )
+            .where(CrawlJob.crawl_run_id == crawl_run_id)
+            .group_by(CrawlJob.status)
+        )
+    ).all()
+
+    job_counts = {
+        status_value: int(count)
+        for status_value, count in rows
+    }
+    job_counts["TOTAL"] = sum(job_counts.values())
+
+    return job_counts
+
+
+@router.get(
+    "/{crawl_run_id}",
+    response_model=CrawlRunDetailResponse,
+)
+async def get_crawl_run(
+    collection_id: UUID,
+    crawl_run_id: UUID,
+    session: AsyncSession = Depends(get_db_session),
+) -> CrawlRunDetailResponse:
+    crawl_run = await get_crawl_run_for_collection(
+        session,
+        collection_id=collection_id,
+        crawl_run_id=crawl_run_id,
+    )
+
+    return CrawlRunDetailResponse(
+        id=crawl_run.id,
+        collection_id=crawl_run.collection_id,
+        status=crawl_run.status,
+        job_counts=await get_job_counts(session, crawl_run.id),
+        created_at=crawl_run.created_at,
+    )
+
+
+@router.get(
+    "/{crawl_run_id}/documents",
+    response_model=CrawledDocumentListResponse,
+)
+async def list_crawled_documents(
+    collection_id: UUID,
+    crawl_run_id: UUID,
+    session: AsyncSession = Depends(get_db_session),
+) -> CrawledDocumentListResponse:
+    crawl_run = await get_crawl_run_for_collection(
+        session,
+        collection_id=collection_id,
+        crawl_run_id=crawl_run_id,
+    )
+
+    rows = (
+        await session.execute(
+            select(
+                CrawledDocument,
+                CrawlJob.normalized_url,
+            )
+            .join(
+                CrawlJob,
+                CrawlJob.id == CrawledDocument.crawl_job_id,
+            )
+            .where(CrawlJob.crawl_run_id == crawl_run.id)
+            .order_by(CrawledDocument.created_at.desc())
+        )
+    ).all()
+
+    items = [
+        CrawledDocumentResponse(
+            id=document.id,
+            crawl_job_id=document.crawl_job_id,
+            source_url=source_url,
+            title=document.title,
+            extracted_text_preview=(
+                document.extracted_text[:500]
+                if document.extracted_text is not None
+                else None
+            ),
+            raw_object_key=document.raw_object_key,
+            content_type=document.content_type,
+            created_at=document.created_at,
+        )
+        for document, source_url in rows
+    ]
+
+    return CrawledDocumentListResponse(
+        total=len(items),
+        items=items,
     )
 
 
