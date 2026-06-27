@@ -14,6 +14,9 @@ COPY services/api/pyproject.toml services/api/uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-install-project
 
+# Worker containers run without a local source bind mount.
+COPY services/api/app ./app
+
 EXPOSE 8000
 
 CMD ["uv", "run", "--frozen", "fastapi", "dev", "app/main.py", "--host", "0.0.0.0", "--port", "8000"]

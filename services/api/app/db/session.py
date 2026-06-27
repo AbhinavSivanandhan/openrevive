@@ -3,6 +3,7 @@ import logging
 from collections.abc import AsyncIterator
 
 from sqlalchemy import text
+from sqlalchemy.engine import make_url
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -10,6 +11,7 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
+from sqlalchemy.pool import NullPool
 
 from app.core.config import get_settings
 
@@ -21,9 +23,18 @@ MAX_STARTUP_ATTEMPTS = 8
 INITIAL_RETRY_DELAY_SECONDS = 0.5
 MAX_RETRY_DELAY_SECONDS = 4.0
 
+database_name = make_url(settings.database_url).database or ""
+
+engine_options: dict[str, object] = {
+    "pool_pre_ping": True,
+}
+
+if database_name.endswith("_test"):
+    engine_options["poolclass"] = NullPool
+
 engine: AsyncEngine = create_async_engine(
     settings.database_url,
-    pool_pre_ping=True,
+    **engine_options,
 )
 
 session_factory = async_sessionmaker(

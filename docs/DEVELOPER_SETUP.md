@@ -231,3 +231,26 @@ docker compose logs -f --tail=200 postgres
 ### MinIO initialization
 
 `minio-init` is a one-shot Compose service. It creates the local bucket and exits, so it does not normally appear in `docker compose ps`.
+
+## Crawler worker service
+
+`make dev-up` starts one crawler worker alongside the web application, API, PostgreSQL, Redis, and MinIO.
+
+The worker is a separate process from FastAPI. It claims durable jobs from PostgreSQL, performs bounded HTTP fetches, and records durable success or failure state.
+
+Start or rebuild only the worker:
+
+    docker compose up --build -d worker
+
+Run three worker replicas against the same durable queue:
+
+    docker compose up -d --scale worker=3 worker
+
+Inspect worker logs:
+
+    docker compose logs --tail=100 worker
+
+The worker has no public port. Its health and activity are visible through Docker state, worker-heartbeat records, and crawl-job state in PostgreSQL.
+
+The worker intentionally does not bind-mount the API source directory or share a virtual-environment volume. Each replica runs from the built image, so scaling does not introduce shared mutable startup state. After changing worker code, rebuild it with `docker compose up --build -d worker`.
+

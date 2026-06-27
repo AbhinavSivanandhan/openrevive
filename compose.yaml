@@ -94,6 +94,29 @@ services:
       timeout: 3s
       retries: 20
 
+  worker:
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+    working_dir: /workspace/services/api
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      WORKER_LEASE_SECONDS: "60"
+      WORKER_IDLE_POLL_SECONDS: "1.0"
+      WORKER_MAX_RESPONSE_BYTES: "2000000"
+      LOG_LEVEL: INFO
+      S3_ENDPOINT_URL: http://minio:9000
+      S3_BUCKET: ${S3_BUCKET}
+      S3_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      S3_REGION_NAME: us-east-1
+    command: >
+      sh -c "exec uv run --frozen python -m app.crawler.worker_main"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    stop_grace_period: 30s
+
   web:
     build:
       context: ./apps/web

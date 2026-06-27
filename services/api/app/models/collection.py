@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 from sqlalchemy import DateTime, ForeignKey, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+
+if TYPE_CHECKING:
+    from app.models.crawl_run import CrawlRun
 
 
 class Collection(Base):
@@ -45,4 +49,8 @@ class Collection(Base):
 
     workspace: Mapped["Workspace"] = relationship(
         back_populates="collections",
+    )
+    crawl_runs: Mapped[list["CrawlRun"]] = relationship(
+        back_populates="collection",
+        cascade="all, delete-orphan",
     )
