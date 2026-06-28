@@ -33,6 +33,8 @@ async def create_crawl_run_with_jobs(
 
         crawl_run = CrawlRun(
             collection_id=collection.id,
+            status="RUNNING",
+            started_at=datetime.now(UTC),
             seed_urls=urls,
             allowed_domains=["example.com"],
             max_pages=25,
@@ -181,3 +183,47 @@ async def test_completing_all_jobs_marks_crawl_run_succeeded() -> None:
     assert crawl_run.status == "SUCCEEDED"
     assert crawl_run.started_at is not None
     assert crawl_run.completed_at is not None
+
+
+@pytest.mark.anyio
+async def test_complete_job_preserves_cancelled_campaign_status() -> None:
+    from app.crawler.job_finalization import complete_job
+
+    crawl_run_id, _ = await create_crawl_run_with_jobs(
+        ["https://example.com/inflight-cancel"],
+    )
+
+    async with session_factory() as session:
+        claimed_job = await claim_next_job(
+            session,
+            worker_id="worker-a",
+            lease_seconds=60,
+        )
+
+    assert claimed_job is not None
+    assert claimed_job.lease_token is not None
+
+    async with session_factory() as session:
+        crawl_run = await session.get(CrawlRun, crawl_run_id)
+        assert crawl_run is not None
+        crawl_run.status = "CANCELLED"
+        await session.commit()
+
+    async with session_factory() as session:
+        completed_job = await complete_job(
+            session,
+            job_id=claimed_job.id,
+            worker_id="worker-a",
+            lease_token=claimed_job.lease_token,
+            http_status_code=200,
+            fetched_bytes=1_024,
+            fetch_duration_ms=20,
+        )
+
+    assert completed_job.status == "SUCCEEDED"
+
+    async with session_factory() as session:
+        crawl_run = await session.get(CrawlRun, crawl_run_id)
+
+    assert crawl_run is not None
+    assert crawl_run.status == "CANCELLED"

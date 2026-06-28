@@ -205,3 +205,200 @@ def test_crawl_run_detail_and_documents_reads() -> None:
         "for the dashboard."
     )
     assert document["raw_object_key"].endswith("/raw.html")
+
+
+async def get_job_statuses_for_crawl_run(
+    crawl_run_id: str,
+) -> list[str]:
+    async with session_factory() as session:
+        statuses = await session.scalars(
+            select(CrawlJob.status)
+            .where(CrawlJob.crawl_run_id == UUID(crawl_run_id))
+            .order_by(CrawlJob.created_at)
+        )
+        return list(statuses)
+
+
+def test_crawl_run_lifecycle_controls_are_campaign_scoped() -> None:
+    with TestClient(app) as client:
+        collection = create_collection(client)
+
+        create_response = client.post(
+            f"/v1/collections/{collection['id']}/crawl-runs",
+            headers={
+                "Idempotency-Key": "crawler-control-api-001",
+            },
+            json=crawl_request_payload(),
+        )
+
+        assert create_response.status_code == 201
+
+        crawl_run = create_response.json()
+        base_url = (
+            f"/v1/collections/{collection['id']}/"
+            f"crawl-runs/{crawl_run['id']}"
+        )
+
+        start_response = client.post(f"{base_url}/start")
+        pause_response = client.post(f"{base_url}/pause")
+        resume_response = client.post(f"{base_url}/resume")
+        cancel_response = client.post(f"{base_url}/cancel")
+
+    assert start_response.status_code == 200
+    assert start_response.json()["status"] == "RUNNING"
+
+    assert pause_response.status_code == 200
+    assert pause_response.json()["status"] == "PAUSED"
+
+    assert resume_response.status_code == 200
+    assert resume_response.json()["status"] == "RUNNING"
+
+    assert cancel_response.status_code == 200
+    assert cancel_response.json()["status"] == "CANCELLED"
+
+    job_statuses = asyncio.run(
+        get_job_statuses_for_crawl_run(crawl_run["id"])
+    )
+    assert job_statuses == ["CANCELLED", "CANCELLED"]
+
+
+def test_list_crawl_runs_returns_campaign_history() -> None:
+    with TestClient(app) as client:
+        collection = create_collection(client)
+        request_url = (
+            f"/v1/collections/{collection['id']}/crawl-runs"
+        )
+
+        first_response = client.post(
+            request_url,
+            headers={
+                "Idempotency-Key": "campaign-history-001",
+            },
+            json={
+                **crawl_request_payload(),
+                "seed_urls": [
+                    "https://docs.example.com/async",
+                ],
+            },
+        )
+        second_response = client.post(
+            request_url,
+            headers={
+                "Idempotency-Key": "campaign-history-002",
+            },
+            json={
+                **crawl_request_payload(),
+                "seed_urls": [
+                    "https://docs.example.com/concurrency",
+                ],
+            },
+        )
+
+        history_response = client.get(request_url)
+
+    assert first_response.status_code == 201
+    assert second_response.status_code == 201
+    assert history_response.status_code == 200
+
+    history = history_response.json()
+
+    assert history["total"] == 2
+    assert len(history["items"]) == 2
+
+    newest_campaign = history["items"][0]
+    older_campaign = history["items"][1]
+
+    assert newest_campaign["id"] == second_response.json()["id"]
+    assert older_campaign["id"] == first_response.json()["id"]
+
+    assert newest_campaign["status"] == "PENDING"
+    assert newest_campaign["seed_urls"] == [
+        "https://docs.example.com/concurrency",
+    ]
+    assert newest_campaign["job_counts"]["TOTAL"] == 1
+    assert newest_campaign["job_counts"]["PENDING"] == 1
+    assert newest_campaign["job_counts"]["LEASED"] == 0
+    assert newest_campaign["job_counts"]["SUCCEEDED"] == 0
+    assert newest_campaign["job_counts"]["FAILED"] == 0
+    assert newest_campaign["created_at"]
+
+
+async def mark_campaign_job_succeeded_while_paused(
+    crawl_run_id: str,
+) -> None:
+    async with session_factory() as session:
+        job = await session.scalar(
+            select(CrawlJob)
+            .where(
+                CrawlJob.crawl_run_id == UUID(crawl_run_id)
+            )
+            .order_by(CrawlJob.created_at)
+        )
+
+        assert job is not None
+
+        job.status = "SUCCEEDED"
+        job.lease_owner = None
+        job.lease_token = None
+        job.lease_expires_at = None
+
+        await session.commit()
+
+
+def test_resume_terminal_campaign_reconciles_to_succeeded() -> None:
+    with TestClient(app) as client:
+        collection = create_collection(client)
+        request_url = (
+            f"/v1/collections/{collection['id']}/crawl-runs"
+        )
+
+        create_response = client.post(
+            request_url,
+            headers={
+                "Idempotency-Key": "resume-reconcile-001",
+            },
+            json={
+                **crawl_request_payload(),
+                "seed_urls": [
+                    "https://docs.example.com/async-lifecycle",
+                ],
+            },
+        )
+
+        assert create_response.status_code == 201
+
+        crawl_run = create_response.json()
+        campaign_url = (
+            f"{request_url}/{crawl_run['id']}"
+        )
+
+        start_response = client.post(
+            f"{campaign_url}/start",
+        )
+        pause_response = client.post(
+            f"{campaign_url}/pause",
+        )
+
+    assert start_response.status_code == 200
+    assert start_response.json()["status"] == "RUNNING"
+
+    assert pause_response.status_code == 200
+    assert pause_response.json()["status"] == "PAUSED"
+
+    asyncio.run(
+        mark_campaign_job_succeeded_while_paused(
+            crawl_run["id"],
+        )
+    )
+
+    with TestClient(app) as client:
+        resume_response = client.post(
+            f"{campaign_url}/resume",
+        )
+
+    assert resume_response.status_code == 200
+
+    resumed_campaign = resume_response.json()
+    assert resumed_campaign["status"] == "SUCCEEDED"
+    assert resumed_campaign["job_counts"]["TOTAL"] == 1
+    assert resumed_campaign["job_counts"]["SUCCEEDED"] == 1

@@ -19,6 +19,8 @@ def anyio_backend() -> str:
 
 async def create_crawl_run_with_jobs(
     urls: list[str],
+    *,
+    run_status: str = "RUNNING",
 ) -> tuple[object, list[object]]:
     created_at = datetime(2026, 1, 1, tzinfo=UTC)
 
@@ -36,6 +38,12 @@ async def create_crawl_run_with_jobs(
 
         crawl_run = CrawlRun(
             collection_id=collection.id,
+            status=run_status,
+            started_at=(
+                created_at
+                if run_status == "RUNNING"
+                else None
+            ),
             seed_urls=urls,
             allowed_domains=["example.com"],
             max_pages=25,
@@ -200,3 +208,62 @@ async def test_claim_records_last_claimed_worker_id() -> None:
 
     assert job is not None
     assert job.last_claimed_by_worker_id == "worker-attribution"
+
+
+@pytest.mark.anyio
+async def test_claim_next_job_ignores_campaigns_that_are_not_running() -> None:
+    from app.crawler.job_leasing import claim_next_job
+
+    pending_run_id, pending_job_ids = await create_crawl_run_with_jobs(
+        ["https://example.com/pending"],
+        run_status="PENDING",
+    )
+    paused_run_id, paused_job_ids = await create_crawl_run_with_jobs(
+        ["https://example.com/paused"],
+        run_status="PAUSED",
+    )
+    cancelled_run_id, cancelled_job_ids = await create_crawl_run_with_jobs(
+        ["https://example.com/cancelled"],
+        run_status="CANCELLED",
+    )
+    running_run_id, running_job_ids = await create_crawl_run_with_jobs(
+        ["https://example.com/running"],
+        run_status="RUNNING",
+    )
+
+    async with session_factory() as session:
+        claimed_job = await claim_next_job(
+            session,
+            worker_id="worker-control-test",
+            lease_seconds=60,
+        )
+
+    assert claimed_job is not None
+    assert claimed_job.id == running_job_ids[0]
+    assert claimed_job.status == "LEASED"
+
+    async with session_factory() as session:
+        pending_run = await session.get(CrawlRun, pending_run_id)
+        paused_run = await session.get(CrawlRun, paused_run_id)
+        cancelled_run = await session.get(CrawlRun, cancelled_run_id)
+
+        pending_job = await session.get(CrawlJob, pending_job_ids[0])
+        paused_job = await session.get(CrawlJob, paused_job_ids[0])
+        cancelled_job = await session.get(
+            CrawlJob,
+            cancelled_job_ids[0],
+        )
+
+    assert pending_run is not None
+    assert paused_run is not None
+    assert cancelled_run is not None
+    assert pending_run.status == "PENDING"
+    assert paused_run.status == "PAUSED"
+    assert cancelled_run.status == "CANCELLED"
+
+    assert pending_job is not None
+    assert paused_job is not None
+    assert cancelled_job is not None
+    assert pending_job.status == "PENDING"
+    assert paused_job.status == "PENDING"
+    assert cancelled_job.status == "PENDING"

@@ -7,7 +7,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -77,6 +77,33 @@ class CrawledDocumentResponse(BaseModel):
 class CrawledDocumentListResponse(BaseModel):
     total: int
     items: list[CrawledDocumentResponse]
+
+
+JOB_COUNT_STATUSES = (
+    "PENDING",
+    "RETRY_PENDING",
+    "LEASED",
+    "SUCCEEDED",
+    "FAILED",
+    "SKIPPED",
+    "CANCELLED",
+)
+
+
+class CrawlRunSummaryResponse(BaseModel):
+    id: UUID
+    collection_id: UUID
+    status: str
+    seed_urls: list[str]
+    created_at: datetime
+    started_at: datetime | None
+    completed_at: datetime | None
+    job_counts: dict[str, int]
+
+
+class CrawlRunListResponse(BaseModel):
+    total: int
+    items: list[CrawlRunSummaryResponse]
 
 
 def normalize_allowed_domain(value: str) -> str:
@@ -240,12 +267,311 @@ async def get_job_counts(
     ).all()
 
     job_counts = {
-        status_value: int(count)
-        for status_value, count in rows
+        status_value: 0
+        for status_value in JOB_COUNT_STATUSES
     }
+
+    for status_value, count in rows:
+        job_counts[status_value] = int(count)
+
     job_counts["TOTAL"] = sum(job_counts.values())
 
     return job_counts
+
+
+async def get_crawl_run_for_update(
+    session: AsyncSession,
+    *,
+    collection_id: UUID,
+    crawl_run_id: UUID,
+) -> CrawlRun:
+    crawl_run = await session.scalar(
+        select(CrawlRun)
+        .where(
+            CrawlRun.id == crawl_run_id,
+            CrawlRun.collection_id == collection_id,
+        )
+        .with_for_update()
+    )
+
+    if crawl_run is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="crawl run not found",
+        )
+
+    return crawl_run
+
+
+async def to_detail_response(
+    session: AsyncSession,
+    crawl_run: CrawlRun,
+) -> CrawlRunDetailResponse:
+    return CrawlRunDetailResponse(
+        id=crawl_run.id,
+        collection_id=crawl_run.collection_id,
+        status=crawl_run.status,
+        job_counts=await get_job_counts(session, crawl_run.id),
+        created_at=crawl_run.created_at,
+    )
+
+
+async def reconcile_paused_campaign_on_resume(
+    session: AsyncSession,
+    *,
+    crawl_run: CrawlRun,
+    database_now: datetime,
+) -> None:
+    """
+    Resume a paused campaign safely.
+
+    A worker may have finished its final leased job while the campaign was
+    paused. In that case there is nothing left to resume, so derive the
+    terminal campaign state instead of leaving it RUNNING forever.
+    """
+    job_counts = await get_job_counts(session, crawl_run.id)
+
+    terminal_job_count = sum(
+        job_counts[status_value]
+        for status_value in (
+            "SUCCEEDED",
+            "FAILED",
+            "SKIPPED",
+            "CANCELLED",
+        )
+    )
+
+    if (
+        job_counts["TOTAL"] > 0
+        and terminal_job_count == job_counts["TOTAL"]
+    ):
+        if job_counts["FAILED"] > 0:
+            crawl_run.status = (
+                "PARTIALLY_SUCCEEDED"
+                if job_counts["SUCCEEDED"] > 0
+                else "FAILED"
+            )
+        else:
+            crawl_run.status = "SUCCEEDED"
+
+        crawl_run.completed_at = database_now
+    else:
+        crawl_run.status = "RUNNING"
+        crawl_run.completed_at = None
+
+    crawl_run.updated_at = database_now
+
+
+@router.post(
+    "/{crawl_run_id}/start",
+    response_model=CrawlRunDetailResponse,
+)
+async def start_crawl_run(
+    collection_id: UUID,
+    crawl_run_id: UUID,
+    session: AsyncSession = Depends(get_db_session),
+) -> CrawlRunDetailResponse:
+    async with session.begin():
+        crawl_run = await get_crawl_run_for_update(
+            session,
+            collection_id=collection_id,
+            crawl_run_id=crawl_run_id,
+        )
+
+        if crawl_run.status == "PENDING":
+            database_now = await session.scalar(select(func.now()))
+            crawl_run.status = "RUNNING"
+            crawl_run.started_at = crawl_run.started_at or database_now
+            crawl_run.updated_at = database_now
+        elif crawl_run.status != "RUNNING":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "only a PENDING campaign can be started; "
+                    f"current status is {crawl_run.status}"
+                ),
+            )
+
+    return await to_detail_response(session, crawl_run)
+
+
+@router.post(
+    "/{crawl_run_id}/pause",
+    response_model=CrawlRunDetailResponse,
+)
+async def pause_crawl_run(
+    collection_id: UUID,
+    crawl_run_id: UUID,
+    session: AsyncSession = Depends(get_db_session),
+) -> CrawlRunDetailResponse:
+    async with session.begin():
+        crawl_run = await get_crawl_run_for_update(
+            session,
+            collection_id=collection_id,
+            crawl_run_id=crawl_run_id,
+        )
+
+        if crawl_run.status == "RUNNING":
+            crawl_run.status = "PAUSED"
+            crawl_run.updated_at = await session.scalar(select(func.now()))
+        elif crawl_run.status != "PAUSED":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "only a RUNNING campaign can be paused; "
+                    f"current status is {crawl_run.status}"
+                ),
+            )
+
+    return await to_detail_response(session, crawl_run)
+
+
+@router.post(
+    "/{crawl_run_id}/resume",
+    response_model=CrawlRunDetailResponse,
+)
+async def resume_crawl_run(
+    collection_id: UUID,
+    crawl_run_id: UUID,
+    session: AsyncSession = Depends(get_db_session),
+) -> CrawlRunDetailResponse:
+    async with session.begin():
+        crawl_run = await get_crawl_run_for_update(
+            session,
+            collection_id=collection_id,
+            crawl_run_id=crawl_run_id,
+        )
+
+        if crawl_run.status == "PAUSED":
+            database_now = await session.scalar(select(func.now()))
+
+            if not isinstance(database_now, datetime):
+                raise RuntimeError(
+                    "database did not return a timestamp"
+                )
+
+            await reconcile_paused_campaign_on_resume(
+                session,
+                crawl_run=crawl_run,
+                database_now=database_now,
+            )
+        elif crawl_run.status != "RUNNING":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "only a PAUSED campaign can be resumed; "
+                    f"current status is {crawl_run.status}"
+                ),
+            )
+
+    return await to_detail_response(session, crawl_run)
+
+
+@router.post(
+    "/{crawl_run_id}/cancel",
+    response_model=CrawlRunDetailResponse,
+)
+async def cancel_crawl_run(
+    collection_id: UUID,
+    crawl_run_id: UUID,
+    session: AsyncSession = Depends(get_db_session),
+) -> CrawlRunDetailResponse:
+    async with session.begin():
+        crawl_run = await get_crawl_run_for_update(
+            session,
+            collection_id=collection_id,
+            crawl_run_id=crawl_run_id,
+        )
+
+        if crawl_run.status == "CANCELLED":
+            pass
+        elif crawl_run.status in {"PENDING", "RUNNING", "PAUSED"}:
+            database_now = await session.scalar(select(func.now()))
+
+            crawl_run.status = "CANCELLED"
+            crawl_run.updated_at = database_now
+
+            await session.execute(
+                update(CrawlJob)
+                .where(
+                    CrawlJob.crawl_run_id == crawl_run.id,
+                    CrawlJob.status.in_(
+                        ["PENDING", "RETRY_PENDING"],
+                    ),
+                )
+                .values(
+                    status="CANCELLED",
+                    lease_owner=None,
+                    lease_token=None,
+                    lease_expires_at=None,
+                    last_error_code="CAMPAIGN_CANCELLED",
+                    last_error_message=(
+                        "campaign cancelled by control plane"
+                    ),
+                    finished_at=database_now,
+                    updated_at=database_now,
+                )
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "completed campaigns cannot be cancelled; "
+                    f"current status is {crawl_run.status}"
+                ),
+            )
+
+    return await to_detail_response(session, crawl_run)
+
+
+@router.get(
+    "",
+    response_model=CrawlRunListResponse,
+)
+async def list_crawl_runs(
+    collection_id: UUID,
+    session: AsyncSession = Depends(get_db_session),
+) -> CrawlRunListResponse:
+    collection = await session.get(Collection, collection_id)
+
+    if collection is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="collection not found",
+        )
+
+    crawl_runs = list(
+        await session.scalars(
+            select(CrawlRun)
+            .where(CrawlRun.collection_id == collection_id)
+            .order_by(
+                CrawlRun.created_at.desc(),
+                CrawlRun.id.desc(),
+            )
+        )
+    )
+
+    items = [
+        CrawlRunSummaryResponse(
+            id=crawl_run.id,
+            collection_id=crawl_run.collection_id,
+            status=crawl_run.status,
+            seed_urls=crawl_run.seed_urls,
+            created_at=crawl_run.created_at,
+            started_at=crawl_run.started_at,
+            completed_at=crawl_run.completed_at,
+            job_counts=await get_job_counts(
+                session,
+                crawl_run.id,
+            ),
+        )
+        for crawl_run in crawl_runs
+    ]
+
+    return CrawlRunListResponse(
+        total=len(items),
+        items=items,
+    )
 
 
 @router.get(

@@ -101,7 +101,7 @@ services:
     working_dir: /workspace/services/api
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-      WORKER_LEASE_SECONDS: "60"
+      WORKER_LEASE_SECONDS: "180"
       WORKER_IDLE_POLL_SECONDS: "1.0"
       WORKER_MAX_RESPONSE_BYTES: "2000000"
       LOG_LEVEL: INFO

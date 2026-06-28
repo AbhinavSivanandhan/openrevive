@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from uuid import UUID, uuid4
 
-from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.crawl_job import CrawlJob
@@ -43,7 +43,12 @@ async def claim_next_job(
 
         claimable_job = await session.scalar(
             select(CrawlJob)
+            .join(
+                CrawlRun,
+                CrawlRun.id == CrawlJob.crawl_run_id,
+            )
             .where(
+                CrawlRun.status == "RUNNING",
                 CrawlJob.attempt_count < CrawlJob.max_attempts,
                 or_(
                     CrawlJob.status == "PENDING",
@@ -75,19 +80,6 @@ async def claim_next_job(
         )
         claimable_job.started_at = (
             claimable_job.started_at or database_now
-        )
-
-        await session.execute(
-            update(CrawlRun)
-            .where(CrawlRun.id == claimable_job.crawl_run_id)
-            .values(
-                status="RUNNING",
-                started_at=func.coalesce(
-                    CrawlRun.started_at,
-                    database_now,
-                ),
-                updated_at=database_now,
-            )
         )
 
     return claimable_job

@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 import pytest
@@ -34,6 +35,8 @@ async def create_crawl_run_with_job(
 
         crawl_run = CrawlRun(
             collection_id=collection.id,
+            status="RUNNING",
+            started_at=datetime.now(UTC),
             seed_urls=["https://example.com/failure"],
             allowed_domains=["example.com"],
             max_pages=25,
@@ -280,3 +283,46 @@ async def test_mixed_terminal_results_mark_crawl_run_partially_succeeded() -> No
     assert crawl_run is not None
     assert crawl_run.status == "PARTIALLY_SUCCEEDED"
     assert crawl_run.completed_at is not None
+
+
+@pytest.mark.anyio
+async def test_failure_after_campaign_cancel_does_not_requeue_job() -> None:
+    from app.crawler.job_failure import fail_job
+
+    crawl_run_id, _ = await create_crawl_run_with_job(
+        max_attempts=3,
+    )
+
+    async with session_factory() as session:
+        claimed_job = await claim_next_job(
+            session,
+            worker_id="worker-a",
+            lease_seconds=60,
+        )
+
+    assert claimed_job is not None
+    assert claimed_job.lease_token is not None
+
+    async with session_factory() as session:
+        crawl_run = await session.get(CrawlRun, crawl_run_id)
+        assert crawl_run is not None
+        crawl_run.status = "CANCELLED"
+        await session.commit()
+
+    async with session_factory() as session:
+        failed_job = await fail_job(
+            session,
+            job_id=claimed_job.id,
+            worker_id="worker-a",
+            lease_token=claimed_job.lease_token,
+            error_code="HTTP_TIMEOUT",
+            error_message="campaign was cancelled in flight",
+        )
+
+    assert failed_job.status == "CANCELLED"
+
+    async with session_factory() as session:
+        crawl_run = await session.get(CrawlRun, crawl_run_id)
+
+    assert crawl_run is not None
+    assert crawl_run.status == "CANCELLED"

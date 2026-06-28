@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.crawler.job_finalization import LeaseLostError, TERMINAL_JOB_STATUSES
@@ -70,11 +70,25 @@ async def fail_job(
         ):
             raise LeaseLostError("crawl job lease is no longer owned")
 
+        crawl_run = await session.scalar(
+            select(CrawlRun)
+            .where(CrawlRun.id == job.crawl_run_id)
+            .with_for_update()
+        )
+
+        if crawl_run is None:
+            raise LeaseLostError("crawl run does not exist")
+
         job.lease_owner = None
         job.lease_token = None
         job.lease_expires_at = None
         job.last_error_code = normalized_error_code
         job.last_error_message = normalized_error_message
+
+        if crawl_run.status == "CANCELLED":
+            job.status = "CANCELLED"
+            job.finished_at = database_now
+            return job
 
         if job.attempt_count < job.max_attempts:
             job.status = "RETRY_PENDING"
@@ -93,7 +107,10 @@ async def fail_job(
             )
         )
 
-        if int(remaining_non_terminal_jobs or 0) == 0:
+        if (
+            int(remaining_non_terminal_jobs or 0) == 0
+            and crawl_run.status == "RUNNING"
+        ):
             succeeded_jobs = await session.scalar(
                 select(func.count())
                 .select_from(CrawlJob)
@@ -103,20 +120,12 @@ async def fail_job(
                 )
             )
 
-            crawl_run_status = (
+            crawl_run.status = (
                 "PARTIALLY_SUCCEEDED"
                 if int(succeeded_jobs or 0) > 0
                 else "FAILED"
             )
-
-            await session.execute(
-                update(CrawlRun)
-                .where(CrawlRun.id == job.crawl_run_id)
-                .values(
-                    status=crawl_run_status,
-                    completed_at=database_now,
-                    updated_at=database_now,
-                )
-            )
+            crawl_run.completed_at = database_now
+            crawl_run.updated_at = database_now
 
     return job

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.crawl_job import CrawlJob
@@ -13,6 +13,7 @@ TERMINAL_JOB_STATUSES = {
     "SUCCEEDED",
     "FAILED",
     "SKIPPED",
+    "CANCELLED",
 }
 
 
@@ -79,6 +80,15 @@ async def complete_job(
         ):
             raise LeaseLostError("crawl job lease is no longer owned")
 
+        crawl_run = await session.scalar(
+            select(CrawlRun)
+            .where(CrawlRun.id == job.crawl_run_id)
+            .with_for_update()
+        )
+
+        if crawl_run is None:
+            raise LeaseLostError("crawl run does not exist")
+
         job.status = "SUCCEEDED"
         job.lease_owner = None
         job.lease_token = None
@@ -97,15 +107,12 @@ async def complete_job(
             )
         )
 
-        if int(remaining_non_terminal_jobs or 0) == 0:
-            await session.execute(
-                update(CrawlRun)
-                .where(CrawlRun.id == job.crawl_run_id)
-                .values(
-                    status="SUCCEEDED",
-                    completed_at=database_now,
-                    updated_at=database_now,
-                )
-            )
+        if (
+            int(remaining_non_terminal_jobs or 0) == 0
+            and crawl_run.status == "RUNNING"
+        ):
+            crawl_run.status = "SUCCEEDED"
+            crawl_run.completed_at = database_now
+            crawl_run.updated_at = database_now
 
     return job

@@ -25,7 +25,7 @@ from app.crawler.worker_entrypoint import (
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_LEASE_SECONDS = 60
+DEFAULT_LEASE_SECONDS = 180
 DEFAULT_IDLE_POLL_SECONDS = 1.0
 DEFAULT_MAX_RESPONSE_BYTES = 2_000_000
 
