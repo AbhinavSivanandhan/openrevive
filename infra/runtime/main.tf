@@ -37,7 +37,11 @@ locals {
     {
       name  = "LOG_LEVEL"
       value = "INFO"
-    }
+    },
+    {
+      name  = "PGSSLMODE"
+      value = "require"
+    },
   ]
 
   api_container = {
