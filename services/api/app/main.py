@@ -4,6 +4,11 @@ from fastapi import FastAPI, HTTPException, status
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.api.routers.collections import router as collections_router
+from app.core.basic_auth import (
+    BasicAuthMiddleware,
+    build_basic_auth_config,
+)
+from app.core.config import get_settings
 from app.api.routers.crawl_runs import router as crawl_runs_router
 from app.api.routers.workspaces import router as workspaces_router
 from app.db.session import check_database, close_database, wait_for_database
@@ -20,6 +25,11 @@ app = FastAPI(
     title="OpenRevive API",
     version="0.1.0",
     lifespan=lifespan,
+)
+
+app.add_middleware(
+    BasicAuthMiddleware,
+    auth_config=build_basic_auth_config(get_settings()),
 )
 
 app.include_router(workspaces_router)

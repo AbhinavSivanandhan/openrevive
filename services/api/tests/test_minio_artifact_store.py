@@ -1,5 +1,6 @@
 import pytest
 
+from app.core.config import Settings
 from app.crawler.artifact_storage import StoredPageArtifact
 
 
@@ -9,8 +10,8 @@ def anyio_backend() -> str:
 
 
 @pytest.mark.anyio
-async def test_minio_artifact_store_uploads_artifact_with_metadata() -> None:
-    from app.crawler.minio_artifact_store import MinioArtifactStore
+async def test_s3_artifact_store_uploads_artifact_with_metadata() -> None:
+    from app.crawler.minio_artifact_store import S3ArtifactStore
 
     class FakeS3Client:
         def __init__(self) -> None:
@@ -20,7 +21,7 @@ async def test_minio_artifact_store_uploads_artifact_with_metadata() -> None:
             self.calls.append(kwargs)
 
     client = FakeS3Client()
-    store = MinioArtifactStore(
+    store = S3ArtifactStore(
         bucket="openrevive-local",
         client=client,
     )
@@ -49,3 +50,49 @@ async def test_minio_artifact_store_uploads_artifact_with_metadata() -> None:
             },
         }
     ]
+
+
+def test_s3_artifact_store_uses_task_role_mode_without_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.crawler.minio_artifact_store import (
+        S3ArtifactStore,
+        build_s3_artifact_store,
+    )
+
+    observed: dict[str, object] = {}
+
+    class FakeS3Client:
+        pass
+
+    def fake_client(
+        service_name: str,
+        **kwargs: object,
+    ) -> FakeS3Client:
+        observed["service_name"] = service_name
+        observed["kwargs"] = kwargs
+        return FakeS3Client()
+
+    monkeypatch.setattr(
+        "app.crawler.minio_artifact_store.boto3.client",
+        fake_client,
+    )
+
+    store = build_s3_artifact_store(
+        Settings(
+            database_url=(
+                "postgresql+asyncpg://test:pass@localhost:5432/"
+                "openrevive_test"
+            ),
+            s3_bucket="openrevive-artifacts",
+            s3_region_name="ap-south-1",
+        )
+    )
+
+    assert isinstance(store, S3ArtifactStore)
+    assert observed == {
+        "service_name": "s3",
+        "kwargs": {
+            "region_name": "ap-south-1",
+        },
+    }

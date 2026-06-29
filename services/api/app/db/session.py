@@ -13,17 +13,17 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.pool import NullPool
 
-from app.core.config import get_settings
+from app.core.config import get_database_url
 
 logger = logging.getLogger(__name__)
 
-settings = get_settings()
+database_url = get_database_url()
 
 MAX_STARTUP_ATTEMPTS = 8
 INITIAL_RETRY_DELAY_SECONDS = 0.5
 MAX_RETRY_DELAY_SECONDS = 4.0
 
-database_name = make_url(settings.database_url).database or ""
+database_name = make_url(database_url).database or ""
 
 engine_options: dict[str, object] = {
     "pool_pre_ping": True,
@@ -33,7 +33,7 @@ if database_name.endswith("_test"):
     engine_options["poolclass"] = NullPool
 
 engine: AsyncEngine = create_async_engine(
-    settings.database_url,
+    database_url,
     **engine_options,
 )
 

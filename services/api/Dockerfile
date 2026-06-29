@@ -16,7 +16,9 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 # Worker containers run without a local source bind mount.
 COPY services/api/app ./app
+COPY services/api/alembic ./alembic
+COPY services/api/alembic.ini ./alembic.ini
 
 EXPOSE 8000
 
-CMD ["uv", "run", "--frozen", "fastapi", "dev", "app/main.py", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uv", "run", "--frozen", "fastapi", "run", "app/main.py", "--host", "0.0.0.0", "--port", "8000"]

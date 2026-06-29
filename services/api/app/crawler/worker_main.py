@@ -14,7 +14,7 @@ from app.crawler.document_persistence import (
     ArtifactStore,
     persist_crawled_document,
 )
-from app.crawler.minio_artifact_store import build_minio_artifact_store
+from app.crawler.minio_artifact_store import build_s3_artifact_store
 from app.crawler.worker_runtime import PageArtifact
 from app.db.session import session_factory
 from app.models.crawled_document import CrawledDocument
@@ -81,7 +81,7 @@ async def run_from_environment(
     *,
     stop_event: asyncio.Event,
     run_process: WorkerProcess = run_worker_process,
-    artifact_store_factory: ArtifactStoreFactory = build_minio_artifact_store,
+    artifact_store_factory: ArtifactStoreFactory = build_s3_artifact_store,
 ) -> None:
     """Load worker configuration and run one worker process."""
 

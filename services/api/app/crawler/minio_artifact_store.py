@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
 from typing import Any
 
 import boto3
@@ -11,7 +10,7 @@ from app.core.config import Settings
 from app.crawler.artifact_storage import StoredPageArtifact
 
 
-class MinioArtifactStore:
+class S3ArtifactStore:
     """
     Async wrapper around an S3-compatible object-storage client.
 
@@ -49,42 +48,71 @@ class MinioArtifactStore:
         )
 
 
-def build_minio_artifact_store(
+def build_s3_artifact_store(
     settings: Settings,
-) -> MinioArtifactStore:
-    required_values = {
-        "S3_ENDPOINT_URL": settings.s3_endpoint_url,
-        "S3_BUCKET": settings.s3_bucket,
-        "S3_ACCESS_KEY_ID": settings.s3_access_key_id,
-        "S3_SECRET_ACCESS_KEY": settings.s3_secret_access_key,
-    }
+) -> S3ArtifactStore:
+    """
+    Build the artifact store in one of two explicit modes.
 
-    missing = [
-        name
-        for name, value in required_values.items()
-        if value is None or not value.strip()
-    ]
+    Local mode:
+      S3_ENDPOINT_URL + static MinIO credentials + path-style addressing.
 
-    if missing:
-        joined = ", ".join(missing)
+    AWS mode:
+      No endpoint override. boto3 resolves credentials from the ECS task role.
+    """
+    bucket = (settings.s3_bucket or "").strip()
+
+    if not bucket:
         raise ValueError(
-            f"Missing required object-storage settings: {joined}"
+            "Missing required object-storage setting: S3_BUCKET"
         )
 
-    client = boto3.client(
-        "s3",
-        endpoint_url=settings.s3_endpoint_url,
-        aws_access_key_id=settings.s3_access_key_id,
-        aws_secret_access_key=settings.s3_secret_access_key,
-        region_name=settings.s3_region_name,
-        config=Config(
-            s3={
-                "addressing_style": "path",
-            }
-        ),
-    )
+    endpoint_url = (settings.s3_endpoint_url or "").strip()
 
-    return MinioArtifactStore(
-        bucket=settings.s3_bucket,
+    if endpoint_url:
+        access_key_id = (settings.s3_access_key_id or "").strip()
+        secret_access_key = (
+            settings.s3_secret_access_key or ""
+        ).strip()
+
+        missing = [
+            name
+            for name, value in {
+                "S3_ACCESS_KEY_ID": access_key_id,
+                "S3_SECRET_ACCESS_KEY": secret_access_key,
+            }.items()
+            if not value
+        ]
+
+        if missing:
+            raise ValueError(
+                "Missing required local object-storage settings: "
+                + ", ".join(missing)
+            )
+
+        client = boto3.client(
+            "s3",
+            endpoint_url=endpoint_url,
+            aws_access_key_id=access_key_id,
+            aws_secret_access_key=secret_access_key,
+            region_name=settings.s3_region_name,
+            config=Config(
+                s3={
+                    "addressing_style": "path",
+                }
+            ),
+        )
+    else:
+        client = boto3.client(
+            "s3",
+            region_name=settings.s3_region_name,
+        )
+
+    return S3ArtifactStore(
+        bucket=bucket,
         client=client,
     )
+
+
+MinioArtifactStore = S3ArtifactStore
+build_minio_artifact_store = build_s3_artifact_store
