@@ -60,8 +60,6 @@ image_tag() {
 foundation_args() {
   FOUNDATION_ARGS=(
     "-var=aws_region=$AWS_REGION"
-    "-var=api_domain_name=$API_DOMAIN_NAME"
-    "-var=route53_zone_id=$ROUTE53_ZONE_ID"
     "-var=budget_alert_email=$BUDGET_ALERT_EMAIL"
     "-var=monthly_budget_usd=$MONTHLY_BUDGET_USD"
   )
@@ -74,7 +72,6 @@ load_foundation_outputs() {
   DATABASE_NAME="$(tf_foundation output -raw database_name)"
   BASIC_AUTH_SECRET_ARN="$(tf_foundation output -raw basic_auth_secret_arn)"
   ARTIFACT_BUCKET_NAME="$(tf_foundation output -raw artifact_bucket_name)"
-  API_CERTIFICATE_ARN="$(tf_foundation output -raw api_certificate_arn)"
   VPC_ID="$(tf_foundation output -raw vpc_id)"
   ALB_SECURITY_GROUP_ID="$(tf_foundation output -raw alb_security_group_id)"
   API_TASK_SECURITY_GROUP_ID="$(
@@ -101,9 +98,6 @@ runtime_args() {
 
   RUNTIME_ARGS=(
     "-var=aws_region=$AWS_REGION"
-    "-var=route53_zone_id=$ROUTE53_ZONE_ID"
-    "-var=api_domain_name=$API_DOMAIN_NAME"
-    "-var=api_certificate_arn=$API_CERTIFICATE_ARN"
     "-var=vpc_id=$VPC_ID"
     "-var=public_subnet_ids=$PUBLIC_SUBNET_IDS_JSON"
     "-var=alb_security_group_id=$ALB_SECURITY_GROUP_ID"
