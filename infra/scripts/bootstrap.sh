@@ -13,10 +13,7 @@ vercel whoami >/dev/null
 read -r -p "AWS region [ap-south-1]: " AWS_REGION
 AWS_REGION="${AWS_REGION:-ap-south-1}"
 
-read -r -p "Route 53 hosted zone ID: " ROUTE53_ZONE_ID
-ROUTE53_ZONE_ID="${ROUTE53_ZONE_ID#/hostedzone/}"
 
-read -r -p "HTTPS API domain, e.g. api.example.com: " API_DOMAIN_NAME
 read -r -p "Budget alert email: " BUDGET_ALERT_EMAIL
 
 read -r -p "Monthly budget in USD [10]: " MONTHLY_BUDGET_USD
@@ -57,8 +54,6 @@ mkdir -p "$(dirname "$DEPLOY_ENV")"
 
 cat > "$DEPLOY_ENV" <<CONFIG
 AWS_REGION=$(printf '%q' "$AWS_REGION")
-ROUTE53_ZONE_ID=$(printf '%q' "$ROUTE53_ZONE_ID")
-API_DOMAIN_NAME=$(printf '%q' "$API_DOMAIN_NAME")
 BUDGET_ALERT_EMAIL=$(printf '%q' "$BUDGET_ALERT_EMAIL")
 MONTHLY_BUDGET_USD=$(printf '%q' "$MONTHLY_BUDGET_USD")
 AUTO_STOP_AT_UTC=$(printf '%q' "$AUTO_STOP_AT_UTC")
