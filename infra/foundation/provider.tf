@@ -36,9 +36,5 @@ locals {
     zone => cidrsubnet(var.vpc_cidr, 4, index + 8)
   }
 
-  artifact_bucket_name = lower(
-    "${var.project_name}-${var.environment}-" +
-    "${data.aws_caller_identity.current.account_id}-" +
-    "${var.aws_region}-artifacts"
-  )
+  artifact_bucket_name = lower("${var.project_name}-${var.environment}-${data.aws_caller_identity.current.account_id}-${var.aws_region}-artifacts")
 }
