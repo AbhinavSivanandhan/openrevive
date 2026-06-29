@@ -235,7 +235,13 @@ resource "aws_lb_listener" "http" {
 resource "aws_ecs_task_definition" "api" {
   family                   = "${local.name}-api"
   requires_compatibilities = ["FARGATE"]
-  network_mode             = "awsvpc"
+
+  runtime_platform {
+    operating_system_family = "LINUX"
+    cpu_architecture        = "ARM64"
+  }
+
+  network_mode = "awsvpc"
 
   cpu    = "256"
   memory = "512"
@@ -251,7 +257,13 @@ resource "aws_ecs_task_definition" "api" {
 resource "aws_ecs_task_definition" "worker" {
   family                   = "${local.name}-worker"
   requires_compatibilities = ["FARGATE"]
-  network_mode             = "awsvpc"
+
+  runtime_platform {
+    operating_system_family = "LINUX"
+    cpu_architecture        = "ARM64"
+  }
+
+  network_mode = "awsvpc"
 
   cpu    = "256"
   memory = "512"
@@ -267,7 +279,13 @@ resource "aws_ecs_task_definition" "worker" {
 resource "aws_ecs_task_definition" "migration" {
   family                   = "${local.name}-migration"
   requires_compatibilities = ["FARGATE"]
-  network_mode             = "awsvpc"
+
+  runtime_platform {
+    operating_system_family = "LINUX"
+    cpu_architecture        = "ARM64"
+  }
+
+  network_mode = "awsvpc"
 
   cpu    = "256"
   memory = "512"
