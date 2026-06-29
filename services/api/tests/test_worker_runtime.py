@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 import pytest
@@ -34,6 +35,7 @@ async def create_crawl_run_with_job(
 
         crawl_run = CrawlRun(
             collection_id=collection.id,
+            status="RUNNING",
             seed_urls=["https://example.com/page"],
             allowed_domains=["example.com"],
             max_pages=25,
@@ -41,6 +43,7 @@ async def create_crawl_run_with_job(
             request_timeout_seconds=15,
             max_attempts=max_attempts,
             idempotency_key=str(uuid4()),
+            started_at=datetime.now(UTC),
         )
         session.add(crawl_run)
         await session.flush()

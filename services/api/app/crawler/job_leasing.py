@@ -60,10 +60,12 @@ async def claim_next_job(
                 ),
             )
             .order_by(
+                CrawlJob.priority_score.desc(),
+                CrawlJob.depth.asc(),
                 CrawlJob.created_at.asc(),
                 CrawlJob.id.asc(),
             )
-            .with_for_update(skip_locked=True)
+            .with_for_update(of=CrawlJob, skip_locked=True)
             .limit(1)
         )
 

@@ -4,6 +4,8 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from uuid import UUID
 
+from app.crawler.frontier_discovery import discover_links
+from app.crawler.frontier_persistence import enqueue_discovered_links
 from app.crawler.job_failure import fail_job
 from app.crawler.job_finalization import complete_job
 from app.crawler.job_leasing import claim_next_job
@@ -50,6 +52,13 @@ FetchPage = Callable[[str, int], Awaitable[FetchResult]]
 JobClaimedCallback = Callable[[CrawlJob], Awaitable[None]]
 PersistDocument = Callable[..., Awaitable[None]]
 
+MAX_DISCOVERY_CANDIDATES = 250
+
+
+def is_html_artifact(artifact: PageArtifact) -> bool:
+    media_type = artifact.content_type.lower().split(";", 1)[0].strip()
+    return media_type == "text/html"
+
 
 async def process_next_job(
     *,
@@ -58,13 +67,23 @@ async def process_next_job(
     fetch_page: FetchPage,
     on_job_claimed: JobClaimedCallback | None = None,
     persist_document: PersistDocument | None = None,
+    max_discovery_candidates: int = MAX_DISCOVERY_CANDIDATES,
 ) -> WorkerOutcome:
     """
     Process at most one eligible crawl job.
 
-    The network request runs after the lease transaction completes, so a
-    slow remote server does not hold a PostgreSQL transaction open.
+    Network work occurs after the lease transaction commits, so slow remotes
+    never keep PostgreSQL locks open.
+
+    Frontier expansion happens before parent completion. That guarantees a
+    root job cannot mark its campaign SUCCEEDED before durable child work has
+    been inserted.
     """
+    if max_discovery_candidates <= 0:
+        raise ValueError(
+            "max_discovery_candidates must be greater than zero"
+        )
+
     async with session_factory() as session:
         claimed_job = await claim_next_job(
             session,
@@ -151,6 +170,48 @@ async def process_next_job(
                     error_code="ARTIFACT_PERSISTENCE_ERROR",
                     error_message=(
                         "artifact persistence failed: "
+                        f"{exc.__class__.__name__}"
+                    ),
+                )
+
+            return WorkerOutcome(
+                state=failed_job.status,
+                job_id=failed_job.id,
+            )
+
+    artifact = result.artifact
+
+    if (
+        artifact is not None
+        and crawl_run.research_intent is not None
+        and is_html_artifact(artifact)
+    ):
+        try:
+            candidates = discover_links(
+                base_url=claimed_job.normalized_url,
+                html=artifact.body,
+                allowed_domains=crawl_run.allowed_domains,
+                research_intent=crawl_run.research_intent,
+                max_candidates=max_discovery_candidates,
+            )
+
+            if candidates:
+                async with session_factory() as session:
+                    await enqueue_discovered_links(
+                        session,
+                        parent_job_id=claimed_job.id,
+                        candidates=candidates,
+                    )
+        except Exception as exc:
+            async with session_factory() as session:
+                failed_job = await fail_job(
+                    session,
+                    job_id=claimed_job.id,
+                    worker_id=worker_id,
+                    lease_token=claimed_job.lease_token,
+                    error_code="FRONTIER_ENQUEUE_ERROR",
+                    error_message=(
+                        "frontier discovery or persistence failed: "
                         f"{exc.__class__.__name__}"
                     ),
                 )

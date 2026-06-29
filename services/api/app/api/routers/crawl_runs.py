@@ -6,10 +6,11 @@ from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.db.session import get_db_session
 from app.models.collection import Collection
@@ -35,18 +36,56 @@ IdempotencyKey = Annotated[
 class CrawlRunCreateRequest(BaseModel):
     seed_urls: list[str] = Field(min_length=1, max_length=100)
     allowed_domains: list[str] = Field(min_length=1, max_length=100)
+    research_intent: str | None = Field(default=None, max_length=500)
+    name: str | None = Field(default=None, max_length=160)
     max_pages: int = Field(gt=0, le=10_000)
     max_depth: int = Field(ge=0, le=20)
     request_timeout_seconds: int = Field(gt=0, le=120)
     max_attempts: int = Field(gt=0, le=10)
+
+    @field_validator("research_intent")
+    @classmethod
+    def normalize_research_intent(
+        cls,
+        value: str | None,
+    ) -> str | None:
+        if value is None:
+            return None
+
+        normalized_value = value.strip()
+
+        if not normalized_value:
+            raise ValueError(
+                "research_intent must not be blank"
+            )
+
+        return normalized_value
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(
+        cls,
+        value: str | None,
+    ) -> str | None:
+        if value is None:
+            return None
+
+        normalized_value = value.strip()
+
+        if not normalized_value:
+            raise ValueError("name must not be blank")
+
+        return normalized_value
 
 
 class CrawlRunResponse(BaseModel):
     id: UUID
     collection_id: UUID
     status: str
+    name: str | None
     seed_urls: list[str]
     allowed_domains: list[str]
+    research_intent: str | None
     max_pages: int
     max_depth: int
     request_timeout_seconds: int
@@ -59,6 +98,8 @@ class CrawlRunDetailResponse(BaseModel):
     id: UUID
     collection_id: UUID
     status: str
+    name: str | None
+    research_intent: str | None
     job_counts: dict[str, int]
     created_at: datetime
 
@@ -74,10 +115,52 @@ class CrawledDocumentResponse(BaseModel):
     created_at: datetime
 
 
+class CrawledDocumentDetailResponse(BaseModel):
+    id: UUID
+    crawl_job_id: UUID
+    source_url: str
+    original_url: str
+    title: str | None
+    extracted_text: str | None
+    raw_object_key: str
+    content_type: str
+    created_at: datetime
+
+
 class CrawledDocumentListResponse(BaseModel):
     total: int
     items: list[CrawledDocumentResponse]
 
+
+class CrawlFrontierJobResponse(BaseModel):
+    id: UUID
+    parent_job_id: UUID | None
+    parent_url: str | None
+    original_url: str
+    normalized_url: str
+    domain: str
+    depth: int
+    anchor_text: str | None
+    priority_score: int
+    priority_band: str
+    discovery_reason: str | None
+    status: str
+    attempt_count: int
+    max_attempts: int
+    last_claimed_by_worker_id: str | None
+    last_error_code: str | None
+    last_error_message: str | None
+    http_status_code: int | None
+    fetched_bytes: int | None
+    fetch_duration_ms: int | None
+    started_at: datetime | None
+    finished_at: datetime | None
+    created_at: datetime
+
+
+class CrawlFrontierListResponse(BaseModel):
+    total: int
+    items: list[CrawlFrontierJobResponse]
 
 JOB_COUNT_STATUSES = (
     "PENDING",
@@ -94,7 +177,9 @@ class CrawlRunSummaryResponse(BaseModel):
     id: UUID
     collection_id: UUID
     status: str
+    name: str | None
     seed_urls: list[str]
+    research_intent: str | None
     created_at: datetime
     started_at: datetime | None
     completed_at: datetime | None
@@ -185,11 +270,14 @@ def same_request(
     *,
     seed_urls: list[str],
     allowed_domains: list[str],
+    research_intent: str | None,
     payload: CrawlRunCreateRequest,
 ) -> bool:
     return (
-        crawl_run.seed_urls == seed_urls
+        crawl_run.name == payload.name
+        and crawl_run.seed_urls == seed_urls
         and crawl_run.allowed_domains == allowed_domains
+        and crawl_run.research_intent == research_intent
         and crawl_run.max_pages == payload.max_pages
         and crawl_run.max_depth == payload.max_depth
         and crawl_run.request_timeout_seconds
@@ -218,8 +306,10 @@ async def to_response(
         id=crawl_run.id,
         collection_id=crawl_run.collection_id,
         status=crawl_run.status,
+        name=crawl_run.name,
         seed_urls=crawl_run.seed_urls,
         allowed_domains=crawl_run.allowed_domains,
+        research_intent=crawl_run.research_intent,
         max_pages=crawl_run.max_pages,
         max_depth=crawl_run.max_depth,
         request_timeout_seconds=crawl_run.request_timeout_seconds,
@@ -311,6 +401,8 @@ async def to_detail_response(
         id=crawl_run.id,
         collection_id=crawl_run.collection_id,
         status=crawl_run.status,
+        name=crawl_run.name,
+        research_intent=crawl_run.research_intent,
         job_counts=await get_job_counts(session, crawl_run.id),
         created_at=crawl_run.created_at,
     )
@@ -556,7 +648,9 @@ async def list_crawl_runs(
             id=crawl_run.id,
             collection_id=crawl_run.collection_id,
             status=crawl_run.status,
+            name=crawl_run.name,
             seed_urls=crawl_run.seed_urls,
+            research_intent=crawl_run.research_intent,
             created_at=crawl_run.created_at,
             started_at=crawl_run.started_at,
             completed_at=crawl_run.completed_at,
@@ -593,8 +687,139 @@ async def get_crawl_run(
         id=crawl_run.id,
         collection_id=crawl_run.collection_id,
         status=crawl_run.status,
+        name=crawl_run.name,
+        research_intent=crawl_run.research_intent,
         job_counts=await get_job_counts(session, crawl_run.id),
         created_at=crawl_run.created_at,
+    )
+
+
+@router.get(
+    "/{crawl_run_id}/frontier",
+    response_model=CrawlFrontierListResponse,
+)
+async def list_crawl_frontier(
+    collection_id: UUID,
+    crawl_run_id: UUID,
+    session: AsyncSession = Depends(get_db_session),
+) -> CrawlFrontierListResponse:
+    await get_crawl_run_for_collection(
+        session,
+        collection_id=collection_id,
+        crawl_run_id=crawl_run_id,
+    )
+
+    parent_job = aliased(CrawlJob)
+
+    rows = (
+        await session.execute(
+            select(
+                CrawlJob,
+                parent_job.normalized_url.label("parent_url"),
+            )
+            .outerjoin(
+                parent_job,
+                CrawlJob.parent_job_id == parent_job.id,
+            )
+            .where(CrawlJob.crawl_run_id == crawl_run_id)
+            .order_by(
+                CrawlJob.depth.asc(),
+                CrawlJob.priority_score.desc(),
+                CrawlJob.created_at.asc(),
+                CrawlJob.id.asc(),
+            )
+        )
+    ).all()
+
+    items = [
+        CrawlFrontierJobResponse(
+            id=job.id,
+            parent_job_id=job.parent_job_id,
+            parent_url=parent_url,
+            original_url=job.original_url,
+            normalized_url=job.normalized_url,
+            domain=job.domain,
+            depth=job.depth,
+            anchor_text=job.anchor_text,
+            priority_score=job.priority_score,
+            priority_band=job.priority_band,
+            discovery_reason=job.discovery_reason,
+            status=job.status,
+            attempt_count=job.attempt_count,
+            max_attempts=job.max_attempts,
+            last_claimed_by_worker_id=(
+                job.last_claimed_by_worker_id
+            ),
+            last_error_code=job.last_error_code,
+            last_error_message=job.last_error_message,
+            http_status_code=job.http_status_code,
+            fetched_bytes=job.fetched_bytes,
+            fetch_duration_ms=job.fetch_duration_ms,
+            started_at=job.started_at,
+            finished_at=job.finished_at,
+            created_at=job.created_at,
+        )
+        for job, parent_url in rows
+    ]
+
+    return CrawlFrontierListResponse(
+        total=len(items),
+        items=items,
+    )
+
+
+@router.get(
+    "/{crawl_run_id}/documents/{document_id}",
+    response_model=CrawledDocumentDetailResponse,
+)
+async def get_crawled_document(
+    collection_id: UUID,
+    crawl_run_id: UUID,
+    document_id: UUID,
+    session: AsyncSession = Depends(get_db_session),
+) -> CrawledDocumentDetailResponse:
+    crawl_run = await get_crawl_run_for_collection(
+        session,
+        collection_id=collection_id,
+        crawl_run_id=crawl_run_id,
+    )
+
+    row = (
+        await session.execute(
+            select(
+                CrawledDocument,
+                CrawlJob.normalized_url,
+                CrawlJob.original_url,
+            )
+            .join(
+                CrawlJob,
+                CrawlJob.id == CrawledDocument.crawl_job_id,
+            )
+            .where(
+                CrawlJob.crawl_run_id == crawl_run.id,
+                CrawledDocument.id == document_id,
+            )
+        )
+    ).one_or_none()
+
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Crawled document not found for this campaign.",
+        )
+
+    document, source_url, original_url = row
+
+    return CrawledDocumentDetailResponse(
+        id=document.id,
+        crawl_job_id=document.crawl_job_id,
+        source_url=source_url,
+        original_url=original_url,
+        title=document.title,
+        extracted_text=document.extracted_text,
+        raw_object_key=document.raw_object_key,
+        content_type=document.content_type,
+        created_at=document.created_at,
     )
 
 
@@ -724,6 +949,7 @@ async def create_crawl_run(
             existing_run,
             seed_urls=[job[1] for job in seed_jobs],
             allowed_domains=allowed_domains,
+            research_intent=payload.research_intent,
             payload=payload,
         ):
             raise HTTPException(
@@ -739,8 +965,10 @@ async def create_crawl_run(
 
     crawl_run = CrawlRun(
         collection_id=collection_id,
+        name=payload.name,
         seed_urls=[job[1] for job in seed_jobs],
         allowed_domains=allowed_domains,
+        research_intent=payload.research_intent,
         max_pages=payload.max_pages,
         max_depth=payload.max_depth,
         request_timeout_seconds=payload.request_timeout_seconds,
@@ -781,6 +1009,21 @@ async def create_crawl_run(
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="unable to create crawl run",
+            ) from exc
+
+        if not same_request(
+            existing_run,
+            seed_urls=[job[1] for job in seed_jobs],
+            allowed_domains=allowed_domains,
+            research_intent=payload.research_intent,
+            payload=payload,
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Idempotency-Key has already been used with a "
+                    "different crawl request"
+                ),
             ) from exc
 
         response.status_code = status.HTTP_200_OK

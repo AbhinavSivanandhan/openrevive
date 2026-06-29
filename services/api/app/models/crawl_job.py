@@ -54,6 +54,14 @@ class CrawlJob(Base):
             "crawl_run_id",
             "domain",
         ),
+        Index(
+            "ix_crawl_jobs_frontier_order",
+            "crawl_run_id",
+            "status",
+            "priority_score",
+            "depth",
+            "created_at",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(
@@ -84,6 +92,25 @@ class CrawlJob(Base):
     depth: Mapped[int] = mapped_column(
         Integer,
         nullable=False,
+    )
+
+    anchor_text: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+    priority_score: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        server_default=text("0"),
+    )
+    priority_band: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        server_default=text("'LOW'"),
+    )
+    discovery_reason: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
     )
 
     status: Mapped[str] = mapped_column(

@@ -85,3 +85,49 @@ async def test_persist_crawled_document_uploads_then_records_metadata() -> None:
 
     assert session.added_objects == [document]
     assert session.flushed is True
+
+
+def test_extract_document_content_prefers_article_over_chrome() -> None:
+    from app.crawler.document_persistence import (
+        extract_document_content,
+    )
+    from app.crawler.worker_runtime import PageArtifact
+
+    artifact = PageArtifact(
+        content_type="text/html",
+        body=b"""
+        <html>
+          <head>
+            <title>Coroutines and tasks</title>
+          </head>
+          <body>
+            <div class="bd-header">Theme Auto Light Dark</div>
+            <nav>Previous topic Next topic</nav>
+            <main>
+              <aside>Table of Contents</aside>
+              <article>
+                <h1>Coroutines and tasks</h1>
+                <p>
+                  Task groups coordinate concurrent tasks and cancellation.
+                </p>
+              </article>
+              <div class="prev-next-bottom">
+                Previous topic Next topic
+              </div>
+            </main>
+            <footer>Report a bug Improve this page</footer>
+          </body>
+        </html>
+        """,
+    )
+
+    title, extracted_text = extract_document_content(artifact)
+
+    assert title == "Coroutines and tasks"
+    assert extracted_text == (
+        "Coroutines and tasks "
+        "Task groups coordinate concurrent tasks and cancellation."
+    )
+    assert "Theme Auto Light Dark" not in extracted_text
+    assert "Previous topic" not in extracted_text
+    assert "Report a bug" not in extracted_text

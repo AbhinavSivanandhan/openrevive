@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
 import pytest
@@ -35,6 +36,8 @@ async def create_crawl_job(
 
         crawl_run = CrawlRun(
             collection_id=collection.id,
+            status="RUNNING",
+            started_at=datetime.now(timezone.utc),
             seed_urls=["https://example.com/worker-service"],
             allowed_domains=["example.com"],
             max_pages=25,

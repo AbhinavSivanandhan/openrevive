@@ -267,3 +267,48 @@ async def test_claim_next_job_ignores_campaigns_that_are_not_running() -> None:
     assert pending_job.status == "PENDING"
     assert paused_job.status == "PENDING"
     assert cancelled_job.status == "PENDING"
+
+
+@pytest.mark.anyio
+async def test_claim_next_job_prefers_priority_before_fifo() -> None:
+    from app.crawler.job_leasing import claim_next_job
+
+    _, job_ids = await create_crawl_run_with_jobs(
+        [
+            "https://example.com/low-priority-first",
+            "https://example.com/core-priority-later",
+        ]
+    )
+
+    async with session_factory() as session:
+        low_priority_job = await session.get(
+            CrawlJob,
+            job_ids[0],
+        )
+        core_priority_job = await session.get(
+            CrawlJob,
+            job_ids[1],
+        )
+
+        assert low_priority_job is not None
+        assert core_priority_job is not None
+
+        low_priority_job.priority_score = 5
+        low_priority_job.priority_band = "LOW"
+
+        core_priority_job.priority_score = 140
+        core_priority_job.priority_band = "CORE"
+
+        await session.commit()
+
+    async with session_factory() as session:
+        claimed_job = await claim_next_job(
+            session,
+            worker_id="worker-priority",
+            lease_seconds=60,
+        )
+
+    assert claimed_job is not None
+    assert claimed_job.id == job_ids[1]
+    assert claimed_job.priority_band == "CORE"
+    assert claimed_job.priority_score == 140

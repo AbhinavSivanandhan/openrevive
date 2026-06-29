@@ -11,6 +11,7 @@ from sqlalchemy import (
     Index,
     Integer,
     String,
+    Text,
     UniqueConstraint,
     func,
     text,
@@ -62,6 +63,11 @@ class CrawlRun(Base):
         server_default=text("'PENDING'"),
     )
 
+    name: Mapped[str | None] = mapped_column(
+        String(160),
+        nullable=True,
+    )
+
     seed_urls: Mapped[list[str]] = mapped_column(
         JSONB,
         nullable=False,
@@ -69,6 +75,10 @@ class CrawlRun(Base):
     allowed_domains: Mapped[list[str]] = mapped_column(
         JSONB,
         nullable=False,
+    )
+    research_intent: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
     )
 
     max_pages: Mapped[int] = mapped_column(
