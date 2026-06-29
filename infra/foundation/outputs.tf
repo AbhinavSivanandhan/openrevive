@@ -50,6 +50,3 @@ output "ecs_task_role_arn" {
   value = aws_iam_role.ecs_task.arn
 }
 
-output "api_certificate_arn" {
-  value = aws_acm_certificate_validation.api.certificate_arn
-}

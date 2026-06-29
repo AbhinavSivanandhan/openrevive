@@ -17,14 +17,6 @@ variable "vpc_cidr" {
   default = "10.42.0.0/16"
 }
 
-variable "api_domain_name" {
-  type = string
-}
-
-variable "route53_zone_id" {
-  type = string
-}
-
 variable "database_name" {
   type    = string
   default = "openrevive"

@@ -15,7 +15,7 @@ output "migration_task_definition_arn" {
 }
 
 output "api_url" {
-  value = "https://${var.api_domain_name}"
+  value = "http://${aws_lb.api.dns_name}"
 }
 
 output "alb_dns_name" {

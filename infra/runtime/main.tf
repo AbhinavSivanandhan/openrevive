@@ -227,37 +227,8 @@ resource "aws_lb_listener" "http" {
   protocol          = "HTTP"
 
   default_action {
-    type = "redirect"
-
-    redirect {
-      protocol    = "HTTPS"
-      port        = "443"
-      status_code = "HTTP_301"
-    }
-  }
-}
-
-resource "aws_lb_listener" "https" {
-  load_balancer_arn = aws_lb.api.arn
-  port              = 443
-  protocol          = "HTTPS"
-  certificate_arn   = var.api_certificate_arn
-
-  default_action {
     type             = "forward"
     target_group_arn = aws_lb_target_group.api.arn
-  }
-}
-
-resource "aws_route53_record" "api" {
-  zone_id = var.route53_zone_id
-  name    = var.api_domain_name
-  type    = "A"
-
-  alias {
-    name                   = aws_lb.api.dns_name
-    zone_id                = aws_lb.api.zone_id
-    evaluate_target_health = true
   }
 }
 
@@ -336,7 +307,7 @@ resource "aws_ecs_service" "api" {
   }
 
   depends_on = [
-    aws_lb_listener.https
+    aws_lb_listener.http
   ]
 }
 

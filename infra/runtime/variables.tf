@@ -20,18 +20,6 @@ variable "public_subnet_ids" {
   type = list(string)
 }
 
-variable "route53_zone_id" {
-  type = string
-}
-
-variable "api_domain_name" {
-  type = string
-}
-
-variable "api_certificate_arn" {
-  type = string
-}
-
 variable "alb_security_group_id" {
   type = string
 }
