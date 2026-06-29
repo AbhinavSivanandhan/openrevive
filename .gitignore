@@ -13,3 +13,11 @@ __pycache__/
 
 .terraform/
 terraform.tfstate*
+
+# OpenRevive deployment-only state and credentials.
+infra/.local/
+infra/**/.terraform/
+infra/**/*.tfstate
+infra/**/*.tfstate.*
+infra/**/*.tfvars
+apps/web/.vercel/

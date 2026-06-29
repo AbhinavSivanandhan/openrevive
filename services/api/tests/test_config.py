@@ -10,10 +10,10 @@ def test_build_async_database_url_from_rds_secret_payload() -> None:
         {
             "username": "openrevive_app",
             "password": "password/with:special@characters",
-            "host": "cluster.example.internal",
-            "port": 5432,
-            "dbname": "openrevive",
-        }
+        },
+        host="cluster.example.internal",
+        port=5432,
+        database="openrevive",
     )
 
     parsed = make_url(database_url)

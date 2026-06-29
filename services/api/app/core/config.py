@@ -16,6 +16,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[4]
 class Settings(BaseSettings):
     database_url: str | None = None
     database_secret_arn: str | None = None
+    database_host: str | None = None
+    database_port: int = 5432
+    database_name: str | None = None
     aws_region: str | None = None
 
     basic_auth_enabled: bool = False
@@ -61,46 +64,40 @@ def _read_secret_string(
 
 def build_async_database_url_from_secret_payload(
     payload: Mapping[str, Any],
+    *,
+    host: str,
+    port: int,
+    database: str,
 ) -> str:
     """
-    Build an async SQLAlchemy URL from the JSON shape used by
-    RDS-managed Secrets Manager credentials.
+    Build an async SQLAlchemy URL from RDS-managed credentials.
+
+    The managed RDS secret provides username/password. ECS injects the
+    Aurora endpoint, port, and database name separately from Terraform
+    outputs, so connection details do not depend on secret JSON shape.
     """
     username = _read_secret_string(payload, "username")
     password = _read_secret_string(payload, "password")
-    host = _read_secret_string(payload, "host")
 
-    database_value = payload.get("dbname") or payload.get("database")
+    normalized_host = _non_blank(host)
+    normalized_database = _non_blank(database)
 
-    if (
-        not isinstance(database_value, str)
-        or not database_value.strip()
-    ):
-        raise ValueError(
-            "Database secret is missing a non-empty 'dbname' field."
-        )
+    if normalized_host is None:
+        raise ValueError("DATABASE_HOST must not be blank.")
 
-    raw_port = payload.get("port", 5432)
-
-    try:
-        port = int(raw_port)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(
-            "Database secret has an invalid 'port' field."
-        ) from exc
+    if normalized_database is None:
+        raise ValueError("DATABASE_NAME must not be blank.")
 
     if port <= 0:
-        raise ValueError(
-            "Database secret has a non-positive 'port' field."
-        )
+        raise ValueError("DATABASE_PORT must be greater than zero.")
 
     return URL.create(
         drivername="postgresql+asyncpg",
         username=username,
         password=password,
-        host=host,
+        host=normalized_host,
         port=port,
-        database=database_value,
+        database=normalized_database,
     ).render_as_string(hide_password=False)
 
 
@@ -165,7 +162,21 @@ def get_database_url() -> str:
             "Database secret JSON must be an object."
         )
 
-    return build_async_database_url_from_secret_payload(payload)
+    database_host = _non_blank(settings.database_host)
+    database_name = _non_blank(settings.database_name)
+
+    if database_host is None or database_name is None:
+        raise RuntimeError(
+            "DATABASE_SECRET_ARN mode requires DATABASE_HOST and "
+            "DATABASE_NAME."
+        )
+
+    return build_async_database_url_from_secret_payload(
+        payload,
+        host=database_host,
+        port=settings.database_port,
+        database=database_name,
+    )
 
 
 def get_sync_database_url() -> str:
