@@ -61,3 +61,8 @@ output "crawl_event_dlq_url" {
 output "aurora_cluster_identifier" {
   value = aws_rds_cluster.main.cluster_identifier
 }
+
+
+output "basic_auth_secret_arn" {
+  value = aws_secretsmanager_secret.basic_auth.arn
+}

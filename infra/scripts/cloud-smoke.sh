@@ -16,7 +16,40 @@ export AWS_PAGER=""
 load_cloud_env
 load_foundation_outputs
 
-API_BASE_URL="$(tf_runtime output -raw api_base_url)"
+if [[ -z "${FRONTEND_URL:-}" ]]; then
+  echo "FAIL: set FRONTEND_URL to the HTTPS Vercel deployment URL." >&2
+  exit 1
+fi
+
+if [[ "$FRONTEND_URL" != https://* ]]; then
+  echo "FAIL: FRONTEND_URL must use HTTPS." >&2
+  exit 1
+fi
+
+CREDENTIALS_FILE="$INFRA/.local/basic-auth.json"
+
+BASIC_AUTH_CREDENTIALS="$(
+  python3 - "$CREDENTIALS_FILE" <<'PY2'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    payload = json.load(handle)
+
+username = payload.get("username")
+password = payload.get("password")
+
+if not isinstance(username, str) or not username.strip():
+    raise SystemExit("Credential file has no valid username.")
+
+if not isinstance(password, str) or len(password) < 24:
+    raise SystemExit("Credential file has no valid password.")
+
+print(f"{username}:{password}")
+PY2
+)"
+
+API_BASE_URL="${FRONTEND_URL%/}/api"
 WORKER_LOG_GROUP="$(tf_runtime output -raw worker_log_group_name)"
 
 SMOKE_SEED_URL="${SMOKE_SEED_URL:-https://docs.python.org/3/library/asyncio.html}"
@@ -67,7 +100,7 @@ print(json.dumps({
 )"
 
 WORKSPACE_JSON="$(
-  curl -fsS \
+  curl -fsS --user "$BASIC_AUTH_CREDENTIALS" \
     -X POST "$API_BASE_URL/v1/workspaces" \
     -H 'Content-Type: application/json' \
     -d "$WORKSPACE_PAYLOAD"
@@ -76,7 +109,7 @@ WORKSPACE_JSON="$(
 WORKSPACE_ID="$(printf '%s' "$WORKSPACE_JSON" | json_field id)"
 
 COLLECTION_JSON="$(
-  curl -fsS \
+  curl -fsS --user "$BASIC_AUTH_CREDENTIALS" \
     -X POST "$API_BASE_URL/v1/workspaces/$WORKSPACE_ID/collections" \
     -H 'Content-Type: application/json' \
     -d '{
@@ -109,7 +142,7 @@ print(json.dumps({
 )"
 
 RUN_JSON="$(
-  curl -fsS \
+  curl -fsS --user "$BASIC_AUTH_CREDENTIALS" \
     -X POST "$API_BASE_URL/v1/collections/$COLLECTION_ID/crawl-runs" \
     -H 'Content-Type: application/json' \
     -H "Idempotency-Key: $IDEMPOTENCY_KEY" \
@@ -121,7 +154,7 @@ RUN_ID="$(printf '%s' "$RUN_JSON" | json_field id)"
 echo "Created pending campaign: $RUN_ID"
 
 START_JSON="$(
-  curl -fsS \
+  curl -fsS --user "$BASIC_AUTH_CREDENTIALS" \
     -X POST "$API_BASE_URL/v1/collections/$COLLECTION_ID/crawl-runs/$RUN_ID/start"
 )"
 
@@ -141,7 +174,7 @@ TERMINAL_STATUS=""
 
 for attempt in $(seq 1 "$MAX_POLLS"); do
   DETAIL_JSON="$(
-    curl -fsS \
+    curl -fsS --user "$BASIC_AUTH_CREDENTIALS" \
       "$API_BASE_URL/v1/collections/$COLLECTION_ID/crawl-runs/$RUN_ID"
   )"
 
@@ -167,7 +200,7 @@ fi
 echo "PASS: crawl reached SUCCEEDED."
 
 DOCUMENTS_JSON="$(
-  curl -fsS \
+  curl -fsS --user "$BASIC_AUTH_CREDENTIALS" \
     "$API_BASE_URL/v1/collections/$COLLECTION_ID/crawl-runs/$RUN_ID/documents"
 )"
 

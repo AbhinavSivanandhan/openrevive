@@ -12,6 +12,10 @@ load_cloud_env
 echo "===== initialize and apply foundation ====="
 tf_foundation init -upgrade
 foundation_apply
+
+echo "===== ensure private-access credentials ====="
+"$(dirname "$0")/cloud-auth-bootstrap.sh"
+
 load_foundation_outputs
 
 echo "===== build and push ARM64 API/worker image ====="

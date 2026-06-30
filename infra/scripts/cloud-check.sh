@@ -24,6 +24,38 @@ assert_equal() {
   echo "PASS: $label ($actual)"
 }
 
+load_private_access_credentials() {
+  local credentials_file="$INFRA/.local/basic-auth.json"
+
+  [[ -f "$credentials_file" ]] || \
+    fail "Missing private-access credential file: $credentials_file"
+
+  BASIC_AUTH_CREDENTIALS="$(
+    python3 - "$credentials_file" <<'PY2'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    payload = json.load(handle)
+
+username = payload.get("username")
+password = payload.get("password")
+
+if not isinstance(username, str) or not username.strip():
+    raise SystemExit("Credential file has no valid username.")
+
+if not isinstance(password, str) or len(password) < 24:
+    raise SystemExit("Credential file has no valid password.")
+
+print(f"{username}:{password}")
+PY2
+  )"
+
+  [[ -n "$BASIC_AUTH_CREDENTIALS" ]] || \
+    fail "Could not load private-access credentials."
+}
+
+
 load_cloud_env
 load_foundation_outputs
 
@@ -128,10 +160,14 @@ echo "NOTE: verify the budget confirmation email separately."
 echo
 
 if [[ -n "${FRONTEND_URL:-}" ]]; then
+  [[ "$FRONTEND_URL" == https://* ]] ||     fail "FRONTEND_URL must use HTTPS for private-access verification."
+
+  load_private_access_credentials
+
   echo "----- Vercel proxy -----"
 
   FRONTEND_HEALTH="$(
-    curl -fsS --max-time 20 "${FRONTEND_URL%/}/api/health"
+    curl -fsS --max-time 20       --user "$BASIC_AUTH_CREDENTIALS"       "${FRONTEND_URL%/}/api/health"
   )"
 
   FRONTEND_STATUS="$(
