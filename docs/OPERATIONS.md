@@ -381,3 +381,73 @@ When the environment is no longer needed:
 ```bash
 CONFIRM=DELETE_DEMO_DATA make cloud-nuke
 ```
+
+## Private access
+
+OpenRevive production access is protected with HTTP Basic Authentication.
+
+The same credentials protect:
+
+    Vercel frontend routes
+    Vercel /api/* proxy routes
+    FastAPI application endpoints
+
+The ALB health endpoints remain unauthenticated because AWS uses them for ECS target health checks:
+
+    /health
+    /health/ready
+
+### Retrieve credentials
+
+The deployment bootstrap creates credentials once and stores them locally:
+
+    infra/.local/basic-auth.json
+
+This directory is Git-ignored and must never be committed.
+
+To display the credentials on the machine that deployed OpenRevive:
+
+    python3 - <<'PY2'
+    import json
+    from pathlib import Path
+
+    payload = json.loads(
+        Path("infra/.local/basic-auth.json").read_text(encoding="utf-8")
+    )
+
+    print(f"Username: {payload['username']}")
+    print(f"Password: {payload['password']}")
+    PY2
+
+Store the password in a password manager. Do not paste it into tickets, commit it, or add it to documentation.
+
+### Browser access
+
+Open the Vercel deployment URL. Your browser shows an HTTP Basic Auth prompt.
+
+Use the username and password from:
+
+    infra/.local/basic-auth.json
+
+### Programmatic API access
+
+Use the HTTPS Vercel API proxy for programmatic access. Do not use the raw HTTP ALB URL.
+
+    curl --user "username:password" \
+      https://openrevive-aws-demo.vercel.app/api/v1/workspaces
+
+The same standard HTTP Basic Auth header works for future clients, scripts, and agent integrations.
+
+### Credential rotation
+
+To rotate credentials:
+
+1. Replace `infra/.local/basic-auth.json` with a new JSON object containing `username` and `password`.
+2. Run `make cloud-auth-bootstrap` to update AWS Secrets Manager.
+3. Update the matching Vercel Production environment variables.
+4. Run `make cloud-up` so ECS starts API tasks with the updated secret.
+5. Redeploy Vercel Production.
+6. Run authenticated `cloud-check` and `cloud-smoke`.
+
+The current Basic Auth setup is a private-access gate for the demo. A future public API should use HTTPS-only custom-domain infrastructure and a stronger identity model.
+
