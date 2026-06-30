@@ -6,6 +6,7 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.crawler.job_leasing import release_domain_lease
 from app.models.crawl_job import CrawlJob
 from app.models.crawl_run import CrawlRun
 
@@ -79,6 +80,13 @@ async def complete_job(
             or not lease_is_live
         ):
             raise LeaseLostError("crawl job lease is no longer owned")
+
+        await release_domain_lease(
+            session,
+            domain=job.domain,
+            lease_token=lease_token,
+            database_now=database_now,
+        )
 
         crawl_run = await session.scalar(
             select(CrawlRun)

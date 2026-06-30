@@ -7,7 +7,24 @@ def test_crawl_control_plane_tables_are_registered() -> None:
     assert {
         "crawl_runs",
         "crawl_jobs",
+        "crawl_domain_policies",
     } <= set(Base.metadata.tables)
+
+
+
+def test_crawl_domain_policy_has_global_pacing_fields() -> None:
+    policies = Base.metadata.tables["crawl_domain_policies"]
+
+    assert {
+        "domain",
+        "robots_txt",
+        "robots_fetched_at",
+        "robots_http_status",
+        "crawl_delay_seconds",
+        "next_allowed_at",
+        "active_lease_token",
+        "active_lease_expires_at",
+    } <= set(policies.c.keys())
 
 
 def test_crawl_run_belongs_to_a_collection() -> None:

@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
@@ -7,6 +7,7 @@ from app.crawler.job_finalization import LeaseLostError
 from app.crawler.job_leasing import claim_next_job
 from app.db.session import session_factory
 from app.models.collection import Collection
+from app.models.crawl_domain_policy import CrawlDomainPolicy
 from app.models.crawl_job import CrawlJob
 from app.models.crawl_run import CrawlRun
 from app.models.workspace import Workspace
@@ -60,6 +61,22 @@ async def create_crawl_run_with_job(
         await session.commit()
 
         return crawl_run.id, job.id
+
+
+async def make_domain_ready(domain: str) -> None:
+    async with session_factory() as session:
+        policy = await session.get(
+            CrawlDomainPolicy,
+            domain,
+        )
+
+        assert policy is not None
+
+        policy.next_allowed_at = (
+            datetime.now(UTC) - timedelta(seconds=1)
+        )
+
+        await session.commit()
 
 
 @pytest.mark.anyio
@@ -123,6 +140,8 @@ async def test_retry_pending_job_can_be_claimed_again() -> None:
             error_code="HTTP_TIMEOUT",
             error_message="temporary failure",
         )
+
+    await make_domain_ready("example.com")
 
     async with session_factory() as session:
         second_claim = await claim_next_job(
@@ -222,9 +241,9 @@ async def test_mixed_terminal_results_mark_crawl_run_partially_succeeded() -> No
     async with session_factory() as session:
         second_job = CrawlJob(
             crawl_run_id=crawl_run_id,
-            original_url="https://example.com/succeeds",
-            normalized_url="https://example.com/succeeds",
-            domain="example.com",
+            original_url="https://other.example.com/succeeds",
+            normalized_url="https://other.example.com/succeeds",
+            domain="other.example.com",
             depth=0,
             max_attempts=1,
         )

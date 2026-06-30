@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
 import pytest
@@ -51,7 +52,10 @@ async def create_crawl_run_with_jobs(
                 crawl_run_id=crawl_run.id,
                 original_url=url,
                 normalized_url=url,
-                domain="example.com",
+                domain=(
+                    urlsplit(url).hostname
+                    or "example.com"
+                ),
                 depth=0,
                 max_attempts=3,
             )
@@ -150,7 +154,7 @@ async def test_completing_all_jobs_marks_crawl_run_succeeded() -> None:
     crawl_run_id, _ = await create_crawl_run_with_jobs(
         [
             "https://example.com/first",
-            "https://example.com/second",
+            "https://other.example.com/second",
         ]
     )
 

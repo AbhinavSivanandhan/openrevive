@@ -27,7 +27,8 @@ def clear_test_data() -> None:
         with engine.begin() as connection:
             connection.execute(
                 text(
-                    "TRUNCATE TABLE collections, workspaces "
+                    "TRUNCATE TABLE "
+                    "crawl_domain_policies, collections, workspaces "
                     "RESTART IDENTITY CASCADE"
                 )
             )

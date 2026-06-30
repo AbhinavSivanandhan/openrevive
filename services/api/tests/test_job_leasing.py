@@ -1,6 +1,7 @@
 import asyncio
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
+from urllib.parse import urlsplit
 
 import pytest
 from sqlalchemy import select
@@ -61,7 +62,10 @@ async def create_crawl_run_with_jobs(
                 crawl_run_id=crawl_run.id,
                 original_url=url,
                 normalized_url=url,
-                domain="example.com",
+                domain=(
+                    urlsplit(url).hostname
+                    or "example.com"
+                ),
                 depth=0,
                 max_attempts=3,
                 created_at=created_at + timedelta(seconds=index),
@@ -115,8 +119,8 @@ async def test_two_workers_claim_different_jobs_without_duplication() -> None:
 
     _, job_ids = await create_crawl_run_with_jobs(
         [
-            "https://example.com/first",
-            "https://example.com/second",
+            "https://alpha.example.com/first",
+            "https://beta.example.com/second",
         ]
     )
 
@@ -312,3 +316,56 @@ async def test_claim_next_job_prefers_priority_before_fifo() -> None:
     assert claimed_job.id == job_ids[1]
     assert claimed_job.priority_band == "CORE"
     assert claimed_job.priority_score == 140
+
+
+@pytest.mark.anyio
+async def test_paced_high_priority_domain_does_not_starve_ready_domain() -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from app.crawler.job_leasing import claim_next_job
+    from app.models.crawl_domain_policy import CrawlDomainPolicy
+
+    _, job_ids = await create_crawl_run_with_jobs(
+        [
+            "https://alpha.example.com/high-priority",
+            "https://beta.example.com/ready-lower-priority",
+        ]
+    )
+
+    async with session_factory() as session:
+        high_priority_job = await session.get(
+            CrawlJob,
+            job_ids[0],
+        )
+        ready_job = await session.get(
+            CrawlJob,
+            job_ids[1],
+        )
+
+        assert high_priority_job is not None
+        assert ready_job is not None
+
+        high_priority_job.priority_score = 100
+        ready_job.priority_score = 1
+
+        session.add(
+            CrawlDomainPolicy(
+                domain="alpha.example.com",
+                next_allowed_at=(
+                    datetime.now(UTC) + timedelta(seconds=60)
+                ),
+            )
+        )
+
+        await session.commit()
+
+    async with session_factory() as session:
+        claimed_job = await claim_next_job(
+            session,
+            worker_id="worker-ready-domain",
+            lease_seconds=60,
+        )
+
+    assert claimed_job is not None
+    assert claimed_job.id == job_ids[1]
+    assert claimed_job.domain == "beta.example.com"
