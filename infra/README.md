@@ -1,28 +1,26 @@
-# OpenRevive deployment
+# OpenRevive Cloud Infrastructure
 
-Initial setup:
+This directory contains the active cloud deployment for OpenRevive.
 
-    make bootstrap
-    make up
+## Target architecture
 
-Deploy with a deterministic public Python documentation demo:
+- Vercel: Next.js frontend
+- API Gateway + Lambda: FastAPI control plane
+- Neon PostgreSQL: campaign state, crawl frontier, leases, documents
+- Amazon S3: crawl artifacts
+- Amazon SQS + DLQ: crawl-run wake-up events
+- EventBridge Pipes: SQS-to-Fargate task orchestration
+- ECS Fargate RunTask: isolated crawler workers that drain work and exit
 
-    DEMO=python-docs make up
+## Explicit non-goals for this deployment
 
-Or seed the demo after deployment:
+- No Aurora
+- No Application Load Balancer
+- No NAT Gateway
+- No always-on ECS services
+- No Redis
+- No Kubernetes
 
-    make seed-demo
-
-Cost controls:
-
-    make aws-stop
-    make aws-down
-    CONFIRM=DELETE_DEMO_DATA make aws-nuke
-
-`aws-stop` sets API and worker desired count to zero.
-
-`aws-down` destroys only runtime resources: ALB, ECS services, task definitions, scheduler, runtime DNS alias, and log groups. Aurora, S3 artifacts, ECR images, and secrets stay available.
-
-`aws-nuke` requires the exact confirmation value and destroys demo data plus foundation infrastructure.
-
-The Vercel project is not deleted by AWS lifecycle commands.
+Terraform files will be added here after the application supports:
+1. worker drain-and-exit mode, and
+2. one post-commit crawl-run event published to SQS.
