@@ -1,0 +1,29 @@
+# syntax=docker/dockerfile:1
+
+FROM python:3.14-slim
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+COPY --from=public.ecr.aws/awsguru/aws-lambda-adapter:1.0.1 \
+  /lambda-adapter \
+  /opt/extensions/lambda-adapter
+
+WORKDIR /workspace/services/api
+
+ENV PYTHONUNBUFFERED=1 \
+    UV_LINK_MODE=copy \
+    AWS_LWA_PORT=8000 \
+    AWS_LWA_READINESS_CHECK_PATH=/health \
+    AWS_LWA_READINESS_CHECK_PROTOCOL=http
+
+COPY services/api/pyproject.toml services/api/uv.lock ./
+
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-install-project --no-dev
+
+COPY services/api/app ./app
+COPY services/api/alembic ./alembic
+COPY services/api/alembic.ini ./alembic.ini
+
+EXPOSE 8000
+
+CMD ["uv", "run", "--frozen", "fastapi", "run", "app/main.py", "--host", "0.0.0.0", "--port", "8000"]
