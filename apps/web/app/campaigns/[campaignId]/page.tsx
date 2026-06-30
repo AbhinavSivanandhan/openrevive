@@ -68,6 +68,33 @@ type CrawledDocumentList = {
 
 type CampaignAction = "start" | "pause" | "resume" | "cancel";
 
+type CampaignBriefFinding = {
+  statement: string;
+  source_document_ids: string[];
+};
+
+type CampaignBriefPayload = {
+  overview: string;
+  key_findings: CampaignBriefFinding[];
+  open_questions: string[];
+  recommended_follow_ups: string[];
+};
+
+type CampaignBriefResponse = {
+  id: string;
+  crawl_run_id: string;
+  status: "GENERATING" | "READY" | "FAILED";
+  model_id: string;
+  prompt_version: string;
+  input_document_count: number;
+  input_character_count: number;
+  output_token_count: number | null;
+  brief_json: CampaignBriefPayload | null;
+  error_code: string | null;
+  completed_at: string | null;
+  created_at: string;
+};
+
 async function apiRequest<T>(
   path: string,
   init: RequestInit = {},
@@ -141,6 +168,9 @@ export default function CampaignWorkspacePage() {
   const [actionInFlight, setActionInFlight] =
     useState<CampaignAction | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [brief, setBrief] =
+    useState<CampaignBriefResponse | null>(null);
+  const [briefInFlight, setBriefInFlight] = useState(false);
 
   const refresh = useCallback(
     async (silent = false) => {
@@ -239,6 +269,42 @@ export default function CampaignWorkspacePage() {
       );
     } finally {
       setActionInFlight(null);
+    }
+  }
+
+
+  async function generateCampaignBrief() {
+    if (!collectionId || !campaignId) {
+      return;
+    }
+
+    setBriefInFlight(true);
+
+    try {
+      const response = await apiRequest<CampaignBriefResponse>(
+        `/v1/collections/${collectionId}/crawl-runs/` +
+          `${campaignId}/brief`,
+        { method: "POST" },
+      );
+
+      setBrief(response);
+
+      if (response.status === "FAILED") {
+        setError(
+          "The AI brief could not be generated. "
+            + "Use the button to make one manual retry.",
+        );
+      } else {
+        setError(null);
+      }
+    } catch (briefError) {
+      setError(
+        briefError instanceof Error
+          ? briefError.message
+          : "Unable to generate the campaign brief.",
+      );
+    } finally {
+      setBriefInFlight(false);
     }
   }
 
@@ -474,6 +540,139 @@ export default function CampaignWorkspacePage() {
           </section>
         </>
       ) : null}
+      <section className={styles.section}>
+        <div className={styles.sectionHeading}>
+          <div>
+            <p className={styles.eyebrow}>
+              Evidence-backed AI brief
+            </p>
+            <h2>Campaign synthesis</h2>
+            <p className={styles.subtle}>
+              One explicit Nova Micro request per unchanged campaign
+              corpus. Cached briefs are returned without another model call.
+            </p>
+          </div>
+
+          <button
+            className={styles.secondaryButton}
+            disabled={
+              briefInFlight ||
+              !["SUCCEEDED", "PARTIALLY_SUCCEEDED"].includes(
+                campaign?.status ?? "",
+              )
+            }
+            onClick={() => void generateCampaignBrief()}
+            type="button"
+          >
+            {briefInFlight
+              ? "Generating…"
+              : brief?.status === "READY"
+                ? "Open cached brief"
+                : brief?.status === "FAILED"
+                  ? "Retry AI brief"
+                  : "Generate AI brief"}
+          </button>
+        </div>
+
+        {!["SUCCEEDED", "PARTIALLY_SUCCEEDED"].includes(
+          campaign?.status ?? "",
+        ) ? (
+          <p className={styles.subtle}>
+            AI synthesis becomes available after this campaign reaches a
+            terminal state.
+          </p>
+        ) : null}
+
+        {brief?.status === "FAILED" ? (
+          <p className={styles.error}>
+            Brief generation failed
+            {brief.error_code ? ` (${brief.error_code})` : ""}. A retry is
+            only attempted when you press the button again.
+          </p>
+        ) : null}
+
+        {brief?.status === "READY" && brief.brief_json ? (
+          <>
+            <p>
+              <strong>Overview:</strong> {brief.brief_json.overview}
+            </p>
+
+            <p className={styles.subtle}>
+              {brief.input_document_count} persisted source
+              {brief.input_document_count === 1 ? "" : "s"} ·{" "}
+              {brief.output_token_count ?? "Unknown"} generated tokens ·{" "}
+              {brief.completed_at
+                ? `generated ${formatDate(brief.completed_at)}`
+                : "cached result"}
+            </p>
+
+            <div>
+              <h3>Key findings</h3>
+              <ul>
+                {brief.brief_json.key_findings.map(
+                  (finding, index) => (
+                    <li key={`${finding.statement}-${index}`}>
+                      <p>{finding.statement}</p>
+                      <p className={styles.subtle}>
+                        Sources:{" "}
+                        {finding.source_document_ids.map(
+                          (documentId, sourceIndex) => {
+                            const document = documents.find(
+                              (candidate) =>
+                                candidate.id === documentId,
+                            );
+
+                            return (
+                              <span key={documentId}>
+                                {sourceIndex > 0 ? ", " : ""}
+                                <Link
+                                  className={styles.readerBackLink}
+                                  href={
+                                    `/campaigns/${campaignId}/documents/` +
+                                    documentId
+                                  }
+                                >
+                                  {document?.title?.trim() ||
+                                    `Document ${documentId.slice(0, 8)}`}
+                                </Link>
+                              </span>
+                            );
+                          },
+                        )}
+                      </p>
+                    </li>
+                  ),
+                )}
+              </ul>
+            </div>
+
+            {brief.brief_json.open_questions.length > 0 ? (
+              <div>
+                <h3>Open questions</h3>
+                <ul>
+                  {brief.brief_json.open_questions.map((question) => (
+                    <li key={question}>{question}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+
+            {brief.brief_json.recommended_follow_ups.length > 0 ? (
+              <div>
+                <h3>Recommended follow-ups</h3>
+                <ul>
+                  {brief.brief_json.recommended_follow_ups.map(
+                    (followUp) => (
+                      <li key={followUp}>{followUp}</li>
+                    ),
+                  )}
+                </ul>
+              </div>
+            ) : null}
+          </>
+        ) : null}
+      </section>
+
     </main>
   );
 }

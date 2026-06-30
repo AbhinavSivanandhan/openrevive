@@ -13,6 +13,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from app.crawler.crawl_run_events import publish_crawl_run_wakeup
+
+from app.briefing.bedrock_brief_generator import (
+    BriefGenerationError,
+    generate_campaign_brief,
+)
+from app.briefing.campaign_brief_service import (
+    NoUsableCampaignEvidenceError,
+    claim_failed_campaign_brief_for_retry,
+    mark_campaign_brief_failed,
+    mark_campaign_brief_ready,
+    reserve_campaign_brief,
+)
+from app.core.config import get_settings
+from app.models.campaign_brief import CampaignBrief
 from app.db.session import get_db_session
 from app.models.collection import Collection
 from app.models.crawled_document import CrawledDocument
@@ -103,6 +117,40 @@ class CrawlRunDetailResponse(BaseModel):
     research_intent: str | None
     job_counts: dict[str, int]
     created_at: datetime
+
+
+class CampaignBriefResponse(BaseModel):
+    id: UUID
+    crawl_run_id: UUID
+    status: str
+    model_id: str
+    prompt_version: str
+    input_document_count: int
+    input_character_count: int
+    output_token_count: int | None
+    brief_json: dict[str, object] | None
+    error_code: str | None
+    completed_at: datetime | None
+    created_at: datetime
+
+
+def to_campaign_brief_response(
+    brief: CampaignBrief,
+) -> CampaignBriefResponse:
+    return CampaignBriefResponse(
+        id=brief.id,
+        crawl_run_id=brief.crawl_run_id,
+        status=brief.status,
+        model_id=brief.model_id,
+        prompt_version=brief.prompt_version,
+        input_document_count=brief.input_document_count,
+        input_character_count=brief.input_character_count,
+        output_token_count=brief.output_token_count,
+        brief_json=brief.brief_json,
+        error_code=brief.error_code,
+        completed_at=brief.completed_at,
+        created_at=brief.created_at,
+    )
 
 
 class CrawledDocumentResponse(BaseModel):
@@ -1055,3 +1103,96 @@ async def create_crawl_run(
     await session.refresh(crawl_run)
 
     return await to_response(session, crawl_run)
+
+
+@router.post(
+    "/{crawl_run_id}/brief",
+    response_model=CampaignBriefResponse,
+)
+async def generate_campaign_brief_for_campaign(
+    collection_id: UUID,
+    crawl_run_id: UUID,
+    session: AsyncSession = Depends(get_db_session),
+) -> CampaignBriefResponse:
+    """
+    Generate or retrieve one bounded, source-linked campaign brief.
+
+    The route invokes Bedrock only after PostgreSQL atomically reserves a
+    GENERATING row. READY rows are returned from cache. FAILED rows are
+    retried only when the caller explicitly submits this POST again.
+    """
+    crawl_run = await get_crawl_run_for_collection(
+        session,
+        collection_id=collection_id,
+        crawl_run_id=crawl_run_id,
+    )
+
+    if crawl_run.status not in {"SUCCEEDED", "PARTIALLY_SUCCEEDED"}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "campaign briefs require a completed campaign; "
+                f"current status is {crawl_run.status}"
+            ),
+        )
+
+    try:
+        reservation = await reserve_campaign_brief(
+            session,
+            crawl_run=crawl_run,
+        )
+        await session.commit()
+    except NoUsableCampaignEvidenceError as exc:
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc),
+        ) from exc
+
+    brief = reservation.brief
+    should_generate = reservation.created
+
+    if brief.status == "FAILED":
+        should_generate = await claim_failed_campaign_brief_for_retry(
+            session,
+            brief_id=brief.id,
+        )
+        await session.commit()
+        await session.refresh(brief)
+
+    if not should_generate:
+        return to_campaign_brief_response(brief)
+
+    settings = get_settings()
+
+    region_name = (
+        getattr(settings, "aws_region", None)
+        or settings.s3_region_name
+    ).strip()
+
+    try:
+        generated = await generate_campaign_brief(
+            evidence_bundle=reservation.evidence_bundle,
+            model_id=brief.model_id,
+            region_name=region_name,
+        )
+    except Exception:
+        brief = await mark_campaign_brief_failed(
+            session,
+            brief_id=brief.id,
+            error_code="BEDROCK_GENERATION_FAILED",
+            error_message=(
+                "The campaign brief request did not produce "
+                "a valid result."
+            ),
+        )
+        return to_campaign_brief_response(brief)
+
+    brief = await mark_campaign_brief_ready(
+        session,
+        brief_id=brief.id,
+        brief_json=generated.brief_json,
+        output_token_count=generated.output_token_count,
+    )
+
+    return to_campaign_brief_response(brief)

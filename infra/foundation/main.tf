@@ -336,6 +336,28 @@ resource "aws_iam_role_policy" "ecs_task_runtime" {
         Resource = [aws_s3_bucket.artifacts.arn]
       },
       {
+        Sid    = "GenerateCampaignBriefs"
+        Effect = "Allow"
+        Action = ["bedrock:InvokeModel"]
+        Resource = [
+          "arn:aws:bedrock:ap-south-1:333107834549:inference-profile/apac.amazon.nova-micro-v1:0",
+          "arn:aws:bedrock:ap-southeast-2::foundation-model/amazon.nova-micro-v1:0",
+          "arn:aws:bedrock:ap-northeast-1::foundation-model/amazon.nova-micro-v1:0",
+          "arn:aws:bedrock:ap-south-1::foundation-model/amazon.nova-micro-v1:0",
+          "arn:aws:bedrock:ap-northeast-2::foundation-model/amazon.nova-micro-v1:0",
+          "arn:aws:bedrock:ap-southeast-1::foundation-model/amazon.nova-micro-v1:0",
+          "arn:aws:bedrock:ap-northeast-3::foundation-model/amazon.nova-micro-v1:0"
+        ]
+      },
+      {
+        Sid    = "ReadCampaignBriefProfile"
+        Effect = "Allow"
+        Action = ["bedrock:GetInferenceProfile"]
+        Resource = [
+          "arn:aws:bedrock:ap-south-1:333107834549:inference-profile/apac.amazon.nova-micro-v1:0"
+        ]
+      },
+      {
         Sid      = "PublishCrawlWakeups"
         Effect   = "Allow"
         Action   = ["sqs:SendMessage"]
