@@ -21,3 +21,5 @@ infra/**/*.tfstate
 infra/**/*.tfstate.*
 infra/**/*.tfvars
 apps/web/.vercel/
+
+.pytest_cache/
