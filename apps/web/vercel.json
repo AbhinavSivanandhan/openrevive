@@ -1,0 +1,9 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "http://openrevive-demo-api-1225434308.ap-south-1.elb.amazonaws.com/:path*"
+    }
+  ]
+}
