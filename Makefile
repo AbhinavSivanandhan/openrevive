@@ -50,3 +50,21 @@ cloud-down:
 
 cloud-nuke:
 	./infra/scripts/cloud-nuke.sh
+
+.PHONY: cloud-check
+
+cloud-check:
+	./infra/scripts/cloud-check.sh
+
+.PHONY: cloud-smoke
+
+cloud-smoke:
+	./infra/scripts/cloud-smoke.sh
+
+.PHONY: cloud-inventory cloud-costs
+
+cloud-inventory:
+	./infra/scripts/cloud-inventory.sh
+
+cloud-costs:
+	./infra/scripts/cloud-costs.sh

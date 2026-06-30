@@ -25,3 +25,18 @@ CONFIRM=DELETE_DEMO_DATA make cloud-nuke
 Aurora, S3, ECR, SQS, IAM, and budget resources.
 
 `cloud-nuke` destroys everything, including demo data.
+
+## Verification and operations
+
+Run these commands after deployment or whenever you want an operational check:
+
+- `make cloud-check` verifies API health, ECS, Aurora, SQS, EventBridge Pipe,
+  S3 lifecycle, ECR image availability, AWS Budget, and optionally the Vercel proxy.
+- `make cloud-smoke` first runs `cloud-check`, then runs one bounded crawl and
+  verifies final status, persisted S3 evidence, and the worker drain log.
+- `make cloud-inventory` lists AWS resources tagged for this OpenRevive demo.
+- `make cloud-costs` shows current-month account costs by AWS service. Billing
+  data can lag, so it is informational rather than a real-time cost guard.
+
+The smoke test retains its workspace, collection, crawl run, and artifact as
+audit evidence. S3 lifecycle rules remove artifacts after the configured period.
