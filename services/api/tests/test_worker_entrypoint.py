@@ -53,6 +53,8 @@ async def test_run_worker_process_owns_one_fetcher_for_entire_loop() -> None:
         lease_seconds: int,
         idle_poll_seconds: float,
         fetch_page: object,
+        exit_when_idle: bool,
+        idle_polls_before_exit: int,
         stop_event: asyncio.Event,
         persist_document: object | None,
     ) -> None:
@@ -60,6 +62,8 @@ async def test_run_worker_process_owns_one_fetcher_for_entire_loop() -> None:
         observed["lease_seconds"] = lease_seconds
         observed["idle_poll_seconds"] = idle_poll_seconds
         observed["fetch_page"] = fetch_page
+        observed["exit_when_idle"] = exit_when_idle
+        observed["idle_polls_before_exit"] = idle_polls_before_exit
         observed["stop_event"] = stop_event
         observed["persist_document"] = persist_document
         assert fake_fetcher.closed is False
@@ -81,6 +85,8 @@ async def test_run_worker_process_owns_one_fetcher_for_entire_loop() -> None:
         "lease_seconds": 60,
         "idle_poll_seconds": 1.5,
         "fetch_page": fake_fetcher,
+        "exit_when_idle": False,
+        "idle_polls_before_exit": 2,
         "stop_event": stop_event,
         "persist_document": None,
         "exited": True,

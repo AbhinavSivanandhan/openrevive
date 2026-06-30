@@ -40,6 +40,8 @@ async def test_run_from_environment_delegates_worker_configuration(
     assert observed["lease_seconds"] == 45
     assert observed["idle_poll_seconds"] == 1.25
     assert observed["max_response_bytes"] == 2_500_000
+    assert observed["exit_when_idle"] is False
+    assert observed["idle_polls_before_exit"] == 2
     assert observed["stop_event"] is stop_event
     assert observed["settings"] is not None
     assert callable(observed["persist_document"])

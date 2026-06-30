@@ -77,6 +77,28 @@ def read_positive_float(
     return value
 
 
+def read_boolean(
+    environment_variable: str,
+    *,
+    default: bool = False,
+) -> bool:
+    raw_value = os.getenv(
+        environment_variable,
+        "true" if default else "false",
+    )
+    normalized_value = raw_value.strip().lower()
+
+    if normalized_value in {"1", "true", "yes", "on"}:
+        return True
+
+    if normalized_value in {"0", "false", "no", "off"}:
+        return False
+
+    raise ValueError(
+        f"{environment_variable} must be a boolean value"
+    )
+
+
 async def run_from_environment(
     *,
     stop_event: asyncio.Event,
@@ -98,6 +120,14 @@ async def run_from_environment(
     max_response_bytes = read_positive_int(
         "WORKER_MAX_RESPONSE_BYTES",
         default=DEFAULT_MAX_RESPONSE_BYTES,
+    )
+    exit_when_idle = read_boolean(
+        "WORKER_EXIT_WHEN_IDLE",
+        default=False,
+    )
+    idle_polls_before_exit = read_positive_int(
+        "WORKER_IDLE_POLLS_BEFORE_EXIT",
+        default=2,
     )
 
     artifact_store = artifact_store_factory(get_settings())
@@ -128,11 +158,14 @@ async def run_from_environment(
             await session.commit()
 
     logger.info(
-        "Starting crawler worker %s: lease=%ss poll=%.2fs max_bytes=%s",
+        "Starting crawler worker %s: lease=%ss poll=%.2fs max_bytes=%s "
+        "exit_when_idle=%s idle_polls_before_exit=%s",
         worker_id,
         lease_seconds,
         idle_poll_seconds,
         max_response_bytes,
+        exit_when_idle,
+        idle_polls_before_exit,
     )
 
     await run_process(
@@ -140,6 +173,8 @@ async def run_from_environment(
         lease_seconds=lease_seconds,
         idle_poll_seconds=idle_poll_seconds,
         max_response_bytes=max_response_bytes,
+        exit_when_idle=exit_when_idle,
+        idle_polls_before_exit=idle_polls_before_exit,
         stop_event=stop_event,
         persist_document=persist_document,
     )

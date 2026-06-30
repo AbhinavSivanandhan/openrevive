@@ -50,6 +50,8 @@ async def run_worker_process(
     idle_poll_seconds: float,
     max_response_bytes: int,
     stop_event: asyncio.Event,
+    exit_when_idle: bool = False,
+    idle_polls_before_exit: int = 2,
     fetcher_factory: FetcherFactory = HttpxPageFetcher,
     run_loop: WorkerLoop = run_worker_loop,
     persist_document: PersistDocument | None = None,
@@ -63,6 +65,11 @@ async def run_worker_process(
     if max_response_bytes <= 0:
         raise ValueError("max_response_bytes must be greater than zero")
 
+    if idle_polls_before_exit <= 0:
+        raise ValueError(
+            "idle_polls_before_exit must be greater than zero"
+        )
+
     async with fetcher_factory(
         max_response_bytes=max_response_bytes,
     ) as fetcher:
@@ -71,6 +78,8 @@ async def run_worker_process(
             lease_seconds=lease_seconds,
             idle_poll_seconds=idle_poll_seconds,
             fetch_page=fetcher,
+            exit_when_idle=exit_when_idle,
+            idle_polls_before_exit=idle_polls_before_exit,
             stop_event=stop_event,
             persist_document=persist_document,
         )

@@ -23,12 +23,3 @@ dev-ps:
 
 verify:
 	./scripts/verify-dev-env.sh
-
-# OpenRevive AWS lifecycle
-.PHONY: bootstrap seed-demo
-
-bootstrap:
-	./infra/scripts/bootstrap.sh
-
-seed-demo:
-	./infra/scripts/seed-demo.sh
