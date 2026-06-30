@@ -12,6 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
+from app.crawler.crawl_run_events import publish_crawl_run_wakeup
 from app.db.session import get_db_session
 from app.models.collection import Collection
 from app.models.crawled_document import CrawledDocument
@@ -454,6 +455,24 @@ async def reconcile_paused_campaign_on_resume(
     crawl_run.updated_at = database_now
 
 
+async def publish_wakeup_if_running(
+    crawl_run: CrawlRun,
+) -> None:
+    if crawl_run.status != "RUNNING":
+        return
+
+    try:
+        await publish_crawl_run_wakeup(crawl_run.id)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "crawl run is RUNNING, but its worker wake-up signal "
+                "could not be sent; retry start or resume"
+            ),
+        ) from exc
+
+
 @router.post(
     "/{crawl_run_id}/start",
     response_model=CrawlRunDetailResponse,
@@ -483,6 +502,8 @@ async def start_crawl_run(
                     f"current status is {crawl_run.status}"
                 ),
             )
+
+    await publish_wakeup_if_running(crawl_run)
 
     return await to_detail_response(session, crawl_run)
 
@@ -555,6 +576,8 @@ async def resume_crawl_run(
                     f"current status is {crawl_run.status}"
                 ),
             )
+
+    await publish_wakeup_if_running(crawl_run)
 
     return await to_detail_response(session, crawl_run)
 

@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     database_port: int = 5432
     database_name: str | None = None
     aws_region: str | None = None
+    crawl_event_queue_url: str | None = None
 
     basic_auth_enabled: bool = False
     basic_auth_username: str | None = None

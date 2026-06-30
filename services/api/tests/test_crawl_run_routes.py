@@ -693,3 +693,96 @@ def test_crawl_frontier_preserves_original_seed_url() -> None:
         "https://docs.example.com/start?view=full"
     )
 
+def test_start_publishes_wakeup_only_after_run_is_running(
+    monkeypatch,
+) -> None:
+    from app.api.routers import crawl_runs as crawl_run_routes
+
+    published_run_ids: list[UUID] = []
+
+    async def fake_publish(crawl_run_id: UUID) -> bool:
+        published_run_ids.append(crawl_run_id)
+        return True
+
+    monkeypatch.setattr(
+        crawl_run_routes,
+        "publish_crawl_run_wakeup",
+        fake_publish,
+    )
+
+    with TestClient(app) as client:
+        collection = create_collection(client)
+        base_url = (
+            f"/v1/collections/{collection['id']}/crawl-runs"
+        )
+
+        create_response = client.post(
+            base_url,
+            headers={"Idempotency-Key": "sqs-start-001"},
+            json=crawl_request_payload(),
+        )
+
+        assert create_response.status_code == 201
+        assert published_run_ids == []
+
+        crawl_run = create_response.json()
+        start_response = client.post(
+            f"{base_url}/{crawl_run['id']}/start"
+        )
+
+    assert start_response.status_code == 200
+    assert start_response.json()["status"] == "RUNNING"
+    assert published_run_ids == [UUID(crawl_run["id"])]
+
+
+def test_resume_publishes_wakeup_when_campaign_returns_to_running(
+    monkeypatch,
+) -> None:
+    from app.api.routers import crawl_runs as crawl_run_routes
+
+    published_run_ids: list[UUID] = []
+
+    async def fake_publish(crawl_run_id: UUID) -> bool:
+        published_run_ids.append(crawl_run_id)
+        return True
+
+    monkeypatch.setattr(
+        crawl_run_routes,
+        "publish_crawl_run_wakeup",
+        fake_publish,
+    )
+
+    with TestClient(app) as client:
+        collection = create_collection(client)
+        base_url = (
+            f"/v1/collections/{collection['id']}/crawl-runs"
+        )
+
+        create_response = client.post(
+            base_url,
+            headers={"Idempotency-Key": "sqs-resume-001"},
+            json=crawl_request_payload(),
+        )
+        assert create_response.status_code == 201
+
+        crawl_run = create_response.json()
+        start_response = client.post(
+            f"{base_url}/{crawl_run['id']}/start"
+        )
+        assert start_response.status_code == 200
+
+        pause_response = client.post(
+            f"{base_url}/{crawl_run['id']}/pause"
+        )
+        assert pause_response.status_code == 200
+
+        published_run_ids.clear()
+
+        resume_response = client.post(
+            f"{base_url}/{crawl_run['id']}/resume"
+        )
+
+    assert resume_response.status_code == 200
+    assert resume_response.json()["status"] == "RUNNING"
+    assert published_run_ids == [UUID(crawl_run["id"])]
+
