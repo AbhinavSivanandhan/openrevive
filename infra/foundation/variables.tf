@@ -1,0 +1,60 @@
+variable "aws_region" {
+  type    = string
+  default = "ap-south-1"
+}
+
+variable "project_name" {
+  type    = string
+  default = "openrevive"
+}
+
+variable "environment" {
+  type    = string
+  default = "demo"
+}
+
+variable "vpc_cidr" {
+  type    = string
+  default = "10.42.0.0/16"
+}
+
+variable "database_name" {
+  type    = string
+  default = "openrevive"
+}
+
+variable "database_master_username" {
+  type    = string
+  default = "openrevive"
+}
+
+variable "aurora_engine_version" {
+  type        = string
+  default     = ""
+  description = "Optional pinned Aurora PostgreSQL version."
+}
+
+variable "aurora_min_capacity" {
+  type    = number
+  default = 0.5
+}
+
+variable "aurora_max_capacity" {
+  type    = number
+  default = 1.0
+}
+
+variable "artifact_retention_days" {
+  type    = number
+  default = 14
+}
+
+variable "budget_limit_usd" {
+  type    = number
+  default = 10
+}
+
+variable "budget_email" {
+  type    = string
+  default = ""
+}

@@ -1,26 +1,27 @@
-# OpenRevive Cloud Infrastructure
+# OpenRevive AWS demo stack
 
-This directory contains the active cloud deployment for OpenRevive.
+## Architecture
 
-## Target architecture
+Vercel frontend → AWS ALB → ECS/Fargate API → Aurora PostgreSQL Serverless v2
 
-- Vercel: Next.js frontend
-- API Gateway + Lambda: FastAPI control plane
-- Neon PostgreSQL: campaign state, crawl frontier, leases, documents
-- Amazon S3: crawl artifacts
-- Amazon SQS + DLQ: crawl-run wake-up events
-- EventBridge Pipes: SQS-to-Fargate task orchestration
-- ECS Fargate RunTask: isolated crawler workers that drain work and exit
+The API publishes a crawl wake-up event to SQS after a campaign becomes
+RUNNING. EventBridge Pipes launches an on-demand Fargate worker. The
+worker drains PostgreSQL-backed crawl jobs and exits after idle cycles.
 
-## Explicit non-goals for this deployment
+## Lifecycle
 
-- No Aurora
-- No Application Load Balancer
-- No NAT Gateway
-- No always-on ECS services
-- No Redis
-- No Kubernetes
+```bash
+make cloud-up
+make cloud-status
+make cloud-logs
+make cloud-stop
+make cloud-resume
+make cloud-kill
+make cloud-down
+CONFIRM=DELETE_DEMO_DATA make cloud-nuke
+```
 
-Terraform files will be added here after the application supports:
-1. worker drain-and-exit mode, and
-2. one post-commit crawl-run event published to SQS.
+`cloud-down` removes runtime compute and networking while retaining
+Aurora, S3, ECR, SQS, IAM, and budget resources.
+
+`cloud-nuke` destroys everything, including demo data.

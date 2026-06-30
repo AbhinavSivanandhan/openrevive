@@ -1,14 +1,5 @@
-# Terraform working state and provider cache
-.terraform/
-*.tfstate
-*.tfstate.*
-*.tfvars
-*.tfvars.json
-crash.log
-crash.*.log
-
-# Local-only deployment configuration and secrets
 .local/
-.env
-.env.*
-!.env.example
+**/.terraform/
+**/*.tfstate
+**/*.tfstate.*
+runtime/runtime.auto.tfvars.json
