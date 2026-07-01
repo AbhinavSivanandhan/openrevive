@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from uuid import UUID
 
 
-PROMPT_VERSION = "campaign-brief-v3"
+PROMPT_VERSION = "campaign-brief-v7"
 MAX_EVIDENCE_DOCUMENTS = 50
 MAX_EVIDENCE_CHARACTERS = 24_000
 MIN_CHARACTERS_PER_DOCUMENT = 160
@@ -378,8 +378,7 @@ def build_evidence_bundle(
         title = _normalize_text(document.title) or "Untitled document"
         prefix = (
             f"[D{index:02d}]\n"
-            f"Document ID: {document.id}\n"
-            f"URL: {document.source_url}\n"
+                f"URL: {document.source_url}\n"
             f"Title: {title}\n"
             f"Relevance score: {score}\n"
             "Evidence: "
