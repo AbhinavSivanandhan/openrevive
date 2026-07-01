@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Annotated
 from urllib.parse import urlsplit
@@ -38,6 +39,8 @@ router = APIRouter(
     prefix="/v1/collections/{collection_id}/crawl-runs",
     tags=["crawl-runs"],
 )
+
+logger = logging.getLogger(__name__)
 
 IdempotencyKey = Annotated[
     str,
@@ -1175,6 +1178,11 @@ async def generate_campaign_brief_for_campaign(
             region_name=region_name,
         )
     except Exception:
+        logger.exception(
+            "Campaign brief generation failed: crawl_run_id=%s brief_id=%s",
+            crawl_run.id,
+            brief.id,
+        )
         brief = await mark_campaign_brief_failed(
             session,
             brief_id=brief.id,

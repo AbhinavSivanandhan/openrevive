@@ -16,7 +16,7 @@ from app.briefing.evidence_packing import (
 )
 
 
-MAX_BRIEF_OUTPUT_TOKENS = 450
+MAX_BRIEF_OUTPUT_TOKENS = 700
 MAX_REDUCER_INPUT_CHARACTERS = 24_000
 MAX_MAP_REDUCE_MODEL_CALLS = MAX_MAP_GROUPS + 1
 
@@ -73,6 +73,8 @@ Requirements:
 - include a negative finding when a requested item is explicitly absent.
 - open_questions must be [].
 - recommended_follow_ups must be [].
+- Always finish a complete valid JSON object. If the response budget is tight,
+  shorten or omit lower-priority detail rather than returning partial JSON.
 """
 
 _REDUCER_SYSTEM_PROMPT = """You produce concise but sufficiently detailed,
@@ -128,6 +130,8 @@ Requirements:
 - use source_refs exactly as supplied; do not invent or modify them.
 - open_questions must be [].
 - recommended_follow_ups must be [].
+- Always finish a complete valid JSON object. If the response budget is tight,
+  shorten or omit lower-priority detail rather than returning partial JSON.
 """
 
 class BedrockRuntimeClient(Protocol):
