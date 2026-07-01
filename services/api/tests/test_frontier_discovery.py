@@ -207,3 +207,55 @@ def test_discover_links_prioritizes_ipc_and_filters_docs_chrome() -> None:
             "https://docs.python.org/3/library/asyncio-eventloop.html"
         ].priority_score
     )
+
+
+def test_normalize_discovered_url_rejects_non_html_and_embedded_external_paths() -> None:
+    base_url = "https://research.example.com/articles/seed"
+
+    for href in (
+        "/assets/site.css",
+        "/assets/app.js",
+        "/assets/logo.svg",
+        "/files/resume.pdf",
+        "/feed.xml",
+        "/robots.txt",
+        "/redirects.json",
+        "/exports/results.csv",
+        "/(https:/outside.example.net/)",
+    ):
+        assert normalize_discovered_url(
+            base_url=base_url,
+            href=href,
+            allowed_domains=["research.example.com"],
+        ) is None
+
+
+def test_discover_links_keeps_semantically_ambiguous_html_pages_for_ai_selection() -> None:
+    html = b"""
+        <html>
+          <body>
+            <a href="/talks/">Talks</a>
+            <a href="/publications/">Publications</a>
+            <a href="/contact/">Contact</a>
+            <a href="/assets/site.css">Stylesheet</a>
+            <a href="/files/profile.pdf">Profile PDF</a>
+          </body>
+        </html>
+    """
+
+    candidates = discover_links(
+        base_url="https://research.example.com/articles/seed",
+        html=html,
+        allowed_domains=["research.example.com"],
+        research_intent="Any research topic",
+        max_candidates=20,
+    )
+
+    assert {
+        candidate.normalized_url
+        for candidate in candidates
+    } == {
+        "https://research.example.com/talks/",
+        "https://research.example.com/publications/",
+        "https://research.example.com/contact/",
+    }

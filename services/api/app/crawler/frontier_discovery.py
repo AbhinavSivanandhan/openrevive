@@ -16,6 +16,53 @@ _TRACKING_QUERY_PARAMS = {
     "gclid",
 }
 
+# The current fetcher and extractor only support HTML/XHTML pages. These are
+# capability exclusions, not topic or site-specific opinions.
+_NON_HTML_PATH_SUFFIXES = frozenset(
+    {
+        ".7z",
+        ".atom",
+        ".avif",
+        ".bmp",
+        ".css",
+        ".csv",
+        ".eot",
+        ".gif",
+        ".gz",
+        ".ico",
+        ".jpeg",
+        ".jpg",
+        ".js",
+        ".json",
+        ".map",
+        ".mjs",
+        ".mov",
+        ".mp3",
+        ".mp4",
+        ".mpeg",
+        ".pdf",
+        ".png",
+        ".rss",
+        ".svg",
+        ".tar",
+        ".tgz",
+        ".tsv",
+        ".txt",
+        ".wav",
+        ".webm",
+        ".webp",
+        ".woff",
+        ".woff2",
+        ".xml",
+        ".zip",
+    }
+)
+
+_EMBEDDED_URL_SCHEME_PATTERN = re.compile(
+    r"(?:^|/)\(?https?:",
+    re.IGNORECASE,
+)
+
 _NAVIGATION_ANCHORS = {
     "next",
     "previous",
@@ -167,6 +214,24 @@ def _is_tracking_parameter(key: str) -> bool:
     )
 
 
+def _is_non_html_candidate_path(path: str) -> bool:
+    """
+    Reject paths the current HTML-only crawler cannot meaningfully process.
+
+    This deliberately does not classify semantic paths such as /about/,
+    /talks/, /contact/, or /publications/. Those remain available for the
+    later research-intent selector.
+    """
+    normalized_path = path.lower().rstrip("/")
+
+    if _EMBEDDED_URL_SCHEME_PATTERN.search(normalized_path):
+        return True
+
+    return normalized_path.endswith(
+        tuple(_NON_HTML_PATH_SUFFIXES)
+    )
+
+
 def normalize_discovered_url(
     *,
     base_url: str,
@@ -198,6 +263,12 @@ def normalize_discovered_url(
         hostname,
         _normalized_allowed_domains(allowed_domains),
     ):
+        return None
+
+    if any(ord(character) < 32 for character in raw_href):
+        return None
+
+    if _is_non_html_candidate_path(parsed.path):
         return None
 
     default_port = 80 if scheme == "http" else 443

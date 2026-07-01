@@ -1,17 +1,25 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from uuid import UUID
 
-from app.crawler.frontier_discovery import discover_links
+from app.crawler.frontier_discovery import (
+    DiscoveredLink,
+    discover_links,
+)
 from app.crawler.frontier_persistence import enqueue_discovered_links
+from app.crawler.frontier_selection import select_research_frontier
 from app.crawler.job_failure import fail_job
 from app.crawler.job_finalization import complete_job
 from app.crawler.job_leasing import claim_next_job
 from app.db.session import session_factory
 from app.models.crawl_job import CrawlJob
 from app.models.crawl_run import CrawlRun
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +59,7 @@ class WorkerOutcome:
 FetchPage = Callable[[str, int], Awaitable[FetchResult]]
 JobClaimedCallback = Callable[[CrawlJob], Awaitable[None]]
 PersistDocument = Callable[..., Awaitable[None]]
+FrontierSelector = Callable[..., Awaitable[list[DiscoveredLink]]]
 
 MAX_DISCOVERY_CANDIDATES = 250
 
@@ -67,6 +76,7 @@ async def process_next_job(
     fetch_page: FetchPage,
     on_job_claimed: JobClaimedCallback | None = None,
     persist_document: PersistDocument | None = None,
+    frontier_selector: FrontierSelector = select_research_frontier,
     max_discovery_candidates: int = MAX_DISCOVERY_CANDIDATES,
 ) -> WorkerOutcome:
     """
@@ -183,6 +193,7 @@ async def process_next_job(
 
     if (
         artifact is not None
+        and claimed_job.depth == 0
         and crawl_run.research_intent is not None
         and is_html_artifact(artifact)
     ):
@@ -194,14 +205,6 @@ async def process_next_job(
                 research_intent=crawl_run.research_intent,
                 max_candidates=max_discovery_candidates,
             )
-
-            if candidates:
-                async with session_factory() as session:
-                    await enqueue_discovered_links(
-                        session,
-                        parent_job_id=claimed_job.id,
-                        candidates=candidates,
-                    )
         except Exception as exc:
             async with session_factory() as session:
                 failed_job = await fail_job(
@@ -209,9 +212,9 @@ async def process_next_job(
                     job_id=claimed_job.id,
                     worker_id=worker_id,
                     lease_token=claimed_job.lease_token,
-                    error_code="FRONTIER_ENQUEUE_ERROR",
+                    error_code="FRONTIER_DISCOVERY_ERROR",
                     error_message=(
-                        "frontier discovery or persistence failed: "
+                        "frontier discovery failed: "
                         f"{exc.__class__.__name__}"
                     ),
                 )
@@ -220,6 +223,52 @@ async def process_next_job(
                 state=failed_job.status,
                 job_id=failed_job.id,
             )
+
+        selected_candidates = []
+
+        if candidates:
+            try:
+                selected_candidates = await frontier_selector(
+                    candidates=candidates,
+                    research_intent=crawl_run.research_intent,
+                    max_selected=min(
+                        len(candidates),
+                        max(0, crawl_run.max_pages - 1),
+                    ),
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Frontier selection failed for crawl run %s: %s",
+                    crawl_run.id,
+                    exc.__class__.__name__,
+                )
+
+        if selected_candidates:
+            try:
+                async with session_factory() as session:
+                    await enqueue_discovered_links(
+                        session,
+                        parent_job_id=claimed_job.id,
+                        candidates=selected_candidates,
+                    )
+            except Exception as exc:
+                async with session_factory() as session:
+                    failed_job = await fail_job(
+                        session,
+                        job_id=claimed_job.id,
+                        worker_id=worker_id,
+                        lease_token=claimed_job.lease_token,
+                        error_code="FRONTIER_ENQUEUE_ERROR",
+                        error_message=(
+                            "frontier persistence failed: "
+                            f"{exc.__class__.__name__}"
+                        ),
+                    )
+
+                return WorkerOutcome(
+                    state=failed_job.status,
+                    job_id=failed_job.id,
+                )
 
     async with session_factory() as session:
         completed_job = await complete_job(

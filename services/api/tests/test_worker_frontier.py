@@ -70,7 +70,7 @@ async def create_root_crawl_job() -> tuple[UUID, UUID]:
 
 
 @pytest.mark.anyio
-async def test_worker_enqueues_ranked_children_before_finishing_root() -> None:
+async def test_worker_enqueues_only_ai_selected_children_before_finishing_root() -> None:
     from app.crawler.worker_runtime import (
         FetchResult,
         PageArtifact,
@@ -85,19 +85,15 @@ async def test_worker_enqueues_ranked_children_before_finishing_root() -> None:
             <a href="/library/asyncio/">
               Asyncio task groups and scheduling
             </a>
-
             <a href="/library/task-scheduling.html">
               Task scheduling patterns
             </a>
-
             <a href="/library/red-soil.html">
               Red soil reference
             </a>
-
             <a href="https://outside.example.net/ignore.html">
               External page
             </a>
-
             <a href="/library/next.html">Next</a>
           </body>
         </html>
@@ -122,14 +118,36 @@ async def test_worker_enqueues_ranked_children_before_finishing_root() -> None:
             ),
         )
 
+    selector_calls: list[object] = []
+
+    async def frontier_selector(**kwargs: object):
+        selector_calls.append(kwargs)
+        candidates = kwargs["candidates"]
+
+        assert isinstance(candidates, list)
+        assert kwargs["max_selected"] == min(len(candidates), 9)
+
+        return [
+            candidate
+            for candidate in candidates
+            if candidate.normalized_url.endswith(
+                (
+                    "/library/asyncio/",
+                    "/library/task-scheduling.html",
+                )
+            )
+        ]
+
     outcome = await process_next_job(
         worker_id="worker-frontier",
         lease_seconds=60,
         fetch_page=fetch_page,
+        frontier_selector=frontier_selector,
     )
 
     assert outcome.state == "SUCCEEDED"
     assert outcome.job_id == root_job_id
+    assert len(selector_calls) == 1
 
     async with session_factory() as session:
         crawl_run = await session.get(CrawlRun, crawl_run_id)
@@ -147,9 +165,7 @@ async def test_worker_enqueues_ranked_children_before_finishing_root() -> None:
         )
 
     assert crawl_run is not None
-
-    # Root plus three valid, in-scope, non-navigation discoveries.
-    assert len(jobs) == 4
+    assert len(jobs) == 3
 
     root_job = jobs[0]
     children = jobs[1:]
@@ -160,25 +176,163 @@ async def test_worker_enqueues_ranked_children_before_finishing_root() -> None:
     assert [child.normalized_url for child in children] == [
         "https://docs.example.com/library/asyncio/",
         "https://docs.example.com/library/task-scheduling.html",
-        "https://docs.example.com/library/red-soil.html",
     ]
-
-    assert [child.priority_band for child in children] == [
-        "CORE",
-        "RELATED",
-        "LOW",
-    ]
-
     assert all(child.status == "PENDING" for child in children)
     assert all(child.depth == 1 for child in children)
     assert all(child.parent_job_id == root_job_id for child in children)
 
-    assert children[0].anchor_text == (
-        "Asyncio task groups and scheduling"
-    )
-    assert children[0].discovery_reason == (
-        "anchor and URL match research intent"
+    # Completion must not close the run while selected P1 jobs remain.
+    assert crawl_run.status == "RUNNING"
+
+
+@pytest.mark.anyio
+async def test_worker_never_auto_expands_selected_child_jobs() -> None:
+    from app.crawler.worker_runtime import (
+        FetchResult,
+        PageArtifact,
+        process_next_job,
     )
 
-    # Completion must not close the run while P1 jobs are queued.
-    assert crawl_run.status == "RUNNING"
+    crawl_run_id, _ = await create_root_crawl_job()
+
+    root_html = b"""
+        <html>
+          <body>
+            <a href="/library/follow-up.html">Follow-up evidence</a>
+          </body>
+        </html>
+    """
+    child_html = b"""
+        <html>
+          <body>
+            <a href="/library/should-not-be-crawled.html">
+              Nested discovery
+            </a>
+          </body>
+        </html>
+    """
+
+    selector_calls: list[object] = []
+
+    async def frontier_selector(**kwargs: object):
+        selector_calls.append(kwargs)
+        return list(kwargs["candidates"])
+
+    async def fetch_page(
+        url: str,
+        timeout_seconds: int,
+    ) -> FetchResult:
+        body = (
+            root_html
+            if url.endswith("/overview.html")
+            else child_html
+        )
+
+        return FetchResult(
+            http_status_code=200,
+            fetched_bytes=len(body),
+            fetch_duration_ms=25,
+            artifact=PageArtifact(
+                content_type="text/html",
+                body=body,
+            ),
+        )
+
+    first = await process_next_job(
+        worker_id="worker-frontier",
+        lease_seconds=60,
+        fetch_page=fetch_page,
+        frontier_selector=frontier_selector,
+    )
+    # The domain politeness gate spaces same-domain requests by one second.
+    # Let the selected P1 child become eligible before the next worker cycle.
+    import asyncio
+
+    await asyncio.sleep(1.1)
+
+    second = await process_next_job(
+        worker_id="worker-frontier",
+        lease_seconds=60,
+        fetch_page=fetch_page,
+        frontier_selector=frontier_selector,
+    )
+
+    assert first.state == "SUCCEEDED"
+    assert second.state == "SUCCEEDED"
+    assert len(selector_calls) == 1
+
+    async with session_factory() as session:
+        jobs = list(
+            await session.scalars(
+                select(CrawlJob)
+                .where(CrawlJob.crawl_run_id == crawl_run_id)
+                .order_by(CrawlJob.depth.asc())
+            )
+        )
+
+    assert len(jobs) == 2
+    assert all(
+        not job.normalized_url.endswith(
+            "/library/should-not-be-crawled.html"
+        )
+        for job in jobs
+    )
+
+
+@pytest.mark.anyio
+async def test_worker_completes_seed_without_mechanical_fallback_when_selector_fails() -> None:
+    from app.crawler.worker_runtime import (
+        FetchResult,
+        PageArtifact,
+        process_next_job,
+    )
+
+    crawl_run_id, root_job_id = await create_root_crawl_job()
+
+    html = b"""
+        <html>
+          <body>
+            <a href="/library/candidate.html">Possible evidence</a>
+          </body>
+        </html>
+    """
+
+    async def fetch_page(
+        url: str,
+        timeout_seconds: int,
+    ) -> FetchResult:
+        return FetchResult(
+            http_status_code=200,
+            fetched_bytes=len(html),
+            fetch_duration_ms=25,
+            artifact=PageArtifact(
+                content_type="text/html",
+                body=html,
+            ),
+        )
+
+    async def failing_selector(**kwargs: object):
+        raise RuntimeError("provider unavailable")
+
+    outcome = await process_next_job(
+        worker_id="worker-frontier",
+        lease_seconds=60,
+        fetch_page=fetch_page,
+        frontier_selector=failing_selector,
+    )
+
+    assert outcome.state == "SUCCEEDED"
+    assert outcome.job_id == root_job_id
+
+    async with session_factory() as session:
+        jobs = list(
+            await session.scalars(
+                select(CrawlJob)
+                .where(CrawlJob.crawl_run_id == crawl_run_id)
+            )
+        )
+        crawl_run = await session.get(CrawlRun, crawl_run_id)
+
+    assert len(jobs) == 1
+    assert crawl_run is not None
+    assert crawl_run.status == "SUCCEEDED"
