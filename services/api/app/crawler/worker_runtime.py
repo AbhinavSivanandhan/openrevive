@@ -62,6 +62,8 @@ PersistDocument = Callable[..., Awaitable[None]]
 FrontierSelector = Callable[..., Awaitable[list[DiscoveredLink]]]
 
 MAX_DISCOVERY_CANDIDATES = 250
+MAX_FRONTIER_SELECTED_URLS = 12
+FRONTIER_SELECTION_TARGET = 8
 
 
 def is_html_artifact(artifact: PageArtifact) -> bool:
@@ -235,6 +237,7 @@ async def process_next_job(
                     max_selected=min(
                         len(candidates),
                         max(0, crawl_run.max_pages - 1),
+                        MAX_FRONTIER_SELECTED_URLS,
                     ),
                 )
             except Exception as exc:

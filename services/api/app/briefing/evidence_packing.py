@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from uuid import UUID
 
 
-PROMPT_VERSION = "campaign-brief-v2"
+PROMPT_VERSION = "campaign-brief-v3"
 MAX_EVIDENCE_DOCUMENTS = 50
 MAX_EVIDENCE_CHARACTERS = 24_000
 MIN_CHARACTERS_PER_DOCUMENT = 160

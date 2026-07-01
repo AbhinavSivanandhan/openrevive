@@ -16,19 +16,20 @@ from app.briefing.evidence_packing import (
 )
 
 
-MAX_BRIEF_OUTPUT_TOKENS = 700
+MAX_BRIEF_OUTPUT_TOKENS = 450
 MAX_REDUCER_INPUT_CHARACTERS = 24_000
 MAX_MAP_REDUCE_MODEL_CALLS = MAX_MAP_GROUPS + 1
 
-_SYSTEM_PROMPT = """You produce concise, evidence-grounded research briefs.
+_SYSTEM_PROMPT = """You produce concise, evidence-grounded answers.
 
-The subject may be any domain. Answer the supplied research intent first.
-Use only the supplied campaign evidence. Do not invent facts, URLs, or source
-document IDs. State uncertainty as an open question.
+Answer the supplied research intent directly. Use only supplied campaign
+evidence. Do not invent facts, URLs, source document IDs, generic research
+questions, future work, or advice not grounded in the evidence.
 
-Prioritize direct evidence that addresses the research intent. Treat author
-biography, site context, or background material as secondary unless it directly
-answers the intent. Do not pad the brief with generic observations.
+Honor the distinct parts of the request. For example, when the intent asks for
+an article summary, author details, tags/topics, or related material, include
+each only when directly supported by a source. State "Not found in crawled
+sources." only for a requested item with no supporting evidence.
 
 Return JSON only, with this exact shape:
 
@@ -40,27 +41,29 @@ Return JSON only, with this exact shape:
       "source_document_ids": ["UUID"]
     }
   ],
-  "open_questions": ["string"],
-  "recommended_follow_ups": ["string"]
+  "open_questions": [],
+  "recommended_follow_ups": []
 }
 
 Requirements:
-- overview must directly answer or frame the research intent concisely.
-- key_findings must contain at most five actionable, evidence-backed items.
-- every finding must cite at least one supplied document ID.
-- open_questions and recommended_follow_ups must each contain at most five
-  strings.
+- overview is a direct answer in one or two sentences.
+- key_findings contain at most four distinct, useful, evidence-backed items.
+- every finding cites at least one supplied document ID.
+- open_questions must be [].
+- recommended_follow_ups must be [].
+- Do not describe the evidence bundle, source list, or research process.
 """
 
-_REDUCER_SYSTEM_PROMPT = """You produce concise, evidence-grounded research briefs.
+_REDUCER_SYSTEM_PROMPT = """You produce concise, evidence-grounded answers.
 
-The subject may be any domain. You receive validated partial briefs generated
-from separate evidence groups. Answer the supplied research intent first.
+You receive validated partial briefs from separate evidence groups. Answer the
+supplied research intent directly, using only those briefs and their cited
+source IDs. Do not invent facts, URLs, source IDs, generic questions, future
+work, or broad advice.
 
-Use only the supplied partial briefs and their cited source document IDs. Do
-not invent facts, URLs, or source IDs. Preserve uncertainty as an open
-question. Prefer direct evidence over generic background context. Do not pad
-the answer with generic advice.
+Preserve only distinct findings that materially answer the request. Include a
+requested aspect only when supported by a cited source. Do not describe the
+partial briefs, source list, or research process.
 
 Return JSON only, with this exact shape:
 
@@ -72,16 +75,16 @@ Return JSON only, with this exact shape:
       "source_document_ids": ["UUID"]
     }
   ],
-  "open_questions": ["string"],
-  "recommended_follow_ups": ["string"]
+  "open_questions": [],
+  "recommended_follow_ups": []
 }
 
 Requirements:
-- overview must directly answer or frame the research intent concisely.
-- key_findings must contain at most five actionable, evidence-backed items.
-- every finding must cite at least one source ID visible in the partial briefs.
-- open_questions and recommended_follow_ups must each contain at most five
-  strings.
+- overview is a direct answer in one or two sentences.
+- key_findings contain at most four distinct, useful, evidence-backed items.
+- every finding cites at least one source ID visible in the partial briefs.
+- open_questions must be [].
+- recommended_follow_ups must be [].
 """
 
 
@@ -214,9 +217,9 @@ def _parse_model_text(
             "Bedrock response key_findings must be a non-empty list"
         )
 
-    if len(findings) > 5:
+    if len(findings) > 4:
         raise BriefGenerationError(
-            "Bedrock response key_findings exceeds 5 items"
+            "Bedrock response key_findings exceeds 4 items"
         )
 
     normalized_findings: list[dict[str, object]] = []
@@ -279,16 +282,8 @@ def _parse_model_text(
         {
             "overview": overview,
             "key_findings": normalized_findings,
-            "open_questions": _string_list(
-                payload.get("open_questions"),
-                field_name="open_questions",
-                maximum_items=5,
-            ),
-            "recommended_follow_ups": _string_list(
-                payload.get("recommended_follow_ups"),
-                field_name="recommended_follow_ups",
-                maximum_items=5,
-            ),
+            "open_questions": [],
+            "recommended_follow_ups": [],
         },
         output_token_count,
     )

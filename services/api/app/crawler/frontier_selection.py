@@ -22,12 +22,17 @@ MAX_CANDIDATE_ANCHOR_CHARACTERS = 220
 _SYSTEM_PROMPT = """You are a bounded web-research frontier selector.
 
 Given a research intent and candidate URLs already approved by deterministic
-crawl policy, select the smallest subset likely to materially improve a
-source-grounded answer to that intent.
+crawl policy, select a useful coverage set likely to materially improve a
+source-grounded answer. Do not optimize for the smallest possible set.
 
-Remain domain-neutral. Do not assume a topic, website type, or user goal
-beyond the supplied research intent. Assess only the candidate URL and anchor
-text; do not infer page content.
+Remain domain-neutral. Assess only candidate URLs and anchor text; do not
+invent page contents. Use the supplied selection target as guidance, while
+respecting the hard maximum.
+
+When the research intent explicitly asks for multiple kinds of information,
+try to cover distinct requested aspects with different pages when candidates
+support them. Examples include the primary article, author or organization
+context, tags/topics, related material, and public professional/contact links.
 
 Return JSON only:
 
@@ -36,12 +41,12 @@ Return JSON only:
 }
 
 Rules:
-- Select zero or more supplied candidate IDs.
+- Select only supplied candidate IDs.
 - Never invent, modify, or repeat IDs.
 - Select at most the stated maximum.
-- Prefer direct evidence over broad or weak contextual pages.
+- Aim to select up to the stated coverage target when relevant candidates exist.
+- Prefer direct and distinct evidence over duplicate, broad, or weak pages.
 - Do not select a URL merely because it is on the same site.
-- Choose fewer URLs when the existing seed page appears sufficient.
 """
 
 
@@ -239,6 +244,8 @@ async def select_research_frontier(
                         {
                             "text": (
                                 f"Research intent: {normalized_intent}\n"
+                                "Coverage target: "
+                                f"{min(8, max_selected)} relevant URLs\n"
                                 f"Maximum selected URLs: {max_selected}\n\n"
                                 "Candidate pages:\n"
                                 f"{cards}"
