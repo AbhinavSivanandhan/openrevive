@@ -73,11 +73,26 @@ type CampaignBriefFinding = {
   source_document_ids: string[];
 };
 
+type CampaignBriefSynthesis = {
+  mode: "direct" | "map_reduce";
+  model_call_count: number;
+};
+
+type CampaignBriefEvidenceGroup = {
+  group_index: number;
+  input_document_count: number;
+  input_character_count: number;
+  source_document_ids: string[];
+  brief: CampaignBriefPayload;
+};
+
 type CampaignBriefPayload = {
   overview: string;
   key_findings: CampaignBriefFinding[];
   open_questions: string[];
   recommended_follow_ups: string[];
+  synthesis?: CampaignBriefSynthesis;
+  evidence_groups?: CampaignBriefEvidenceGroup[];
 };
 
 type CampaignBriefResponse = {
@@ -548,8 +563,9 @@ export default function CampaignWorkspacePage() {
             </p>
             <h2>Campaign synthesis</h2>
             <p className={styles.subtle}>
-              One explicit Nova Micro request per unchanged campaign
-              corpus. Cached briefs are returned without another model call.
+              One explicit, cached Nova Micro synthesis per unchanged
+              campaign corpus. Larger evidence sets use bounded map-reduce
+              synthesis with at most five total model calls.
             </p>
           </div>
 
@@ -600,7 +616,21 @@ export default function CampaignWorkspacePage() {
             <p className={styles.subtle}>
               {brief.input_document_count} persisted source
               {brief.input_document_count === 1 ? "" : "s"} ·{" "}
-              {brief.output_token_count ?? "Unknown"} generated tokens ·{" "}
+              {brief.output_token_count ?? "Unknown"} generated tokens
+              {brief.brief_json.synthesis ? (
+                <>
+                  {" "}·{" "}
+                  {brief.brief_json.synthesis.mode === "map_reduce"
+                    ? "Map-reduce synthesis"
+                    : "Direct synthesis"}{" "}
+                  · {brief.brief_json.synthesis.model_call_count} Nova
+                  Micro call
+                  {brief.brief_json.synthesis.model_call_count === 1
+                    ? ""
+                    : "s"}
+                </>
+              ) : null}
+              {" "}·{" "}
               {brief.completed_at
                 ? `generated ${formatDate(brief.completed_at)}`
                 : "cached result"}
@@ -667,6 +697,81 @@ export default function CampaignWorkspacePage() {
                     ),
                   )}
                 </ul>
+              </div>
+            ) : null}
+
+            {brief.brief_json.evidence_groups &&
+            brief.brief_json.evidence_groups.length > 0 ? (
+              <div>
+                <h3>Evidence-group briefs</h3>
+                <p className={styles.subtle}>
+                  These partial briefs were generated from separate
+                  relevance-ranked evidence groups before the final synthesis.
+                </p>
+
+                <div className={styles.documentGrid}>
+                  {brief.brief_json.evidence_groups.map((group) => (
+                    <details
+                      className={styles.documentCard}
+                      key={group.group_index}
+                    >
+                      <summary>
+                        Group {group.group_index} ·{" "}
+                        {group.input_document_count} source
+                        {group.input_document_count === 1 ? "" : "s"} ·{" "}
+                        {group.input_character_count.toLocaleString()} evidence
+                        characters
+                      </summary>
+
+                      <p>
+                        <strong>Group overview:</strong> {group.brief.overview}
+                      </p>
+
+                      <h4>Group findings</h4>
+                      <ul>
+                        {group.brief.key_findings.map(
+                          (finding, findingIndex) => (
+                            <li
+                              key={
+                                `${group.group_index}-` +
+                                `${finding.statement}-${findingIndex}`
+                              }
+                            >
+                              <p>{finding.statement}</p>
+                              <p className={styles.subtle}>
+                                Sources:{" "}
+                                {finding.source_document_ids.map(
+                                  (documentId, sourceIndex) => {
+                                    const document = documents.find(
+                                      (candidate) =>
+                                        candidate.id === documentId,
+                                    );
+
+                                    return (
+                                      <span key={documentId}>
+                                        {sourceIndex > 0 ? ", " : ""}
+                                        <Link
+                                          className={styles.readerBackLink}
+                                          href={
+                                            `/campaigns/${campaignId}/documents/` +
+                                            documentId
+                                          }
+                                        >
+                                          {document?.title?.trim() ||
+                                            `Document ${documentId.slice(0, 8)}`}
+                                        </Link>
+                                      </span>
+                                    );
+                                  },
+                                )}
+                              </p>
+                            </li>
+                          ),
+                        )}
+                      </ul>
+                    </details>
+                  ))}
+                </div>
               </div>
             ) : null}
           </>
