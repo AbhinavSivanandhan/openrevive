@@ -98,7 +98,7 @@ async def test_generator_makes_one_bounded_converse_call() -> None:
 
     assert result.output_token_count == 72
     assert result.brief_json["overview"] == (
-        "Crawler workers use durable leases."
+        "Leases prevent duplicate work."
     )
     assert result.brief_json["key_findings"] == [
         {
@@ -119,7 +119,8 @@ async def test_generator_makes_one_bounded_converse_call() -> None:
 
     messages = request["messages"]
     assert isinstance(messages, list)
-    assert str(document_id) in str(messages)
+    assert str(document_id) not in str(messages)
+    assert "[D01]" in str(messages)
     assert "raw.html" not in str(messages)
 
 
@@ -207,13 +208,12 @@ async def test_generator_runs_bounded_map_reduce_for_large_evidence() -> None:
         def converse(self, **kwargs: object) -> dict[str, object]:
             self.calls.append(kwargs)
             request_text = str(kwargs["messages"])
-            source_ids = re.findall(
-                r"[0-9a-f]{8}-[0-9a-f]{4}-"
-                r"[0-9a-f]{4}-[0-9a-f]{4}-"
-                r"[0-9a-f]{12}",
+            source_refs = re.findall(
+                r"\b[DS]\d{2}\b",
                 request_text,
             )
-            assert source_ids
+            assert source_refs
+
 
             overview = (
                 "Reduced answer."
@@ -235,9 +235,7 @@ async def test_generator_runs_bounded_map_reduce_for_large_evidence() -> None:
                                                     "Evidence supports "
                                                     "the research answer."
                                                 ),
-                                                "source_document_ids": [
-                                                    source_ids[0]
-                                                ],
+                                                "source_refs": [source_refs[0]],
                                             }
                                         ],
                                         "open_questions": [],
@@ -265,7 +263,7 @@ async def test_generator_runs_bounded_map_reduce_for_large_evidence() -> None:
     assert len(client.calls) == expected_call_count
     assert expected_call_count <= MAX_MAP_REDUCE_MODEL_CALLS
     assert result.output_token_count == expected_call_count * 31
-    assert result.brief_json["overview"] == "Reduced answer."
+    assert result.brief_json["overview"] == "Evidence supports the research answer."
     assert result.brief_json["synthesis"] == {
         "mode": "map_reduce",
         "model_call_count": expected_call_count,
@@ -274,3 +272,55 @@ async def test_generator_runs_bounded_map_reduce_for_large_evidence() -> None:
     evidence_groups = result.brief_json["evidence_groups"]
     assert isinstance(evidence_groups, list)
     assert len(evidence_groups) == len(plan.map_groups)
+
+
+@pytest.mark.anyio
+async def test_generator_maps_short_refs_and_ignores_model_overview() -> None:
+    bundle = build_bundle()
+    document_id = str(bundle.included_document_ids[0])
+
+    class FakeBedrockClient:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        def converse(self, **kwargs: object) -> dict[str, object]:
+            self.calls.append(kwargs)
+            return {
+                "output": {
+                    "message": {
+                        "content": [
+                            {
+                                "text": (
+                                    "{"
+                                    "\"overview\":\"Invented offer claim\","
+                                    "\"key_findings\":[{"
+                                    "\"statement\":\"Leases prevent duplicate work.\","
+                                    "\"source_refs\":[\"D01\"]"
+                                    "}],"
+                                    "\"open_questions\":[],"
+                                    "\"recommended_follow_ups\":[]"
+                                    "}"
+                                )
+                            }
+                        ]
+                    }
+                }
+            }
+
+    client = FakeBedrockClient()
+
+    result = await generate_campaign_brief(
+        evidence_bundle=bundle,
+        model_id="apac.amazon.nova-micro-v1:0",
+        region_name="ap-south-1",
+        client_factory=lambda _: client,
+    )
+
+    assert result.brief_json["overview"] == (
+        "Leases prevent duplicate work."
+    )
+    assert result.brief_json["key_findings"][0][
+        "source_document_ids"
+    ] == [document_id]
+    assert document_id not in str(client.calls[0]["messages"])
+    assert "[D01]" in str(client.calls[0]["messages"])
