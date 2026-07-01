@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Annotated
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urlsplit
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from app.crawler.crawl_run_events import publish_crawl_run_wakeup
+from app.crawler.frontier_discovery import normalize_discovered_url
 
 from app.briefing.bedrock_brief_generator import (
     BriefGenerationError,
@@ -263,7 +264,7 @@ def normalize_seed_url(value: str) -> tuple[str, str]:
 
     try:
         parsed = urlsplit(raw_url)
-        port = parsed.port
+        _ = parsed.port
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -285,23 +286,17 @@ def normalize_seed_url(value: str) -> tuple[str, str]:
             detail=f"invalid seed URL: {value!r}",
         )
 
-    default_port = 80 if scheme == "http" else 443
-    host_for_netloc = host if ":" not in host else f"[{host}]"
-
-    if port is not None and port != default_port:
-        netloc = f"{host_for_netloc}:{port}"
-    else:
-        netloc = host_for_netloc
-
-    normalized_url = urlunsplit(
-        (
-            scheme,
-            netloc,
-            parsed.path or "/",
-            parsed.query,
-            "",
-        )
+    normalized_url = normalize_discovered_url(
+        base_url=raw_url,
+        href=raw_url,
+        allowed_domains=[host],
     )
+
+    if normalized_url is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"invalid seed URL: {value!r}",
+        )
 
     return normalized_url, host
 
@@ -1060,6 +1055,9 @@ async def create_crawl_run(
                     domain=domain,
                     depth=0,
                     max_attempts=payload.max_attempts,
+                    priority_score=1_000_001,
+                    priority_band="HIGH",
+                    discovery_reason="campaign seed",
                 )
                 for original_url, normalized_url, domain in seed_jobs
             ]

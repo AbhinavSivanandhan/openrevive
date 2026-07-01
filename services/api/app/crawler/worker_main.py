@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_LEASE_SECONDS = 180
 DEFAULT_IDLE_POLL_SECONDS = 1.0
-DEFAULT_MAX_RESPONSE_BYTES = 2_000_000
+DEFAULT_MAX_RESPONSE_BYTES = 4_000_000
 
 WorkerProcess = Callable[..., Awaitable[None]]
 ArtifactStoreFactory = Callable[[Settings], ArtifactStore]

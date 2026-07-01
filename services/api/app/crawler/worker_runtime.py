@@ -204,6 +204,7 @@ async def process_next_job(
                 allowed_domains=crawl_run.allowed_domains,
                 research_intent=crawl_run.research_intent,
                 max_candidates=max_discovery_candidates,
+                excluded_urls={claimed_job.normalized_url},
             )
         except Exception as exc:
             async with session_factory() as session:

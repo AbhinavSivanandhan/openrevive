@@ -14,6 +14,7 @@ from urllib.parse import (
 _TRACKING_QUERY_PARAMS = {
     "fbclid",
     "gclid",
+    "ref",
 }
 
 # The current fetcher and extractor only support HTML/XHTML pages. These are
@@ -444,6 +445,7 @@ def discover_links(
     allowed_domains: list[str],
     research_intent: str,
     max_candidates: int,
+    excluded_urls: set[str] | None = None,
 ) -> list[DiscoveredLink]:
     """
     Extract, filter, deduplicate, rank, and budget in-scope links.
@@ -454,6 +456,7 @@ def discover_links(
     if max_candidates <= 0:
         return []
 
+    excluded = excluded_urls or set()
     parser = _AnchorExtractor()
     parser.feed(html.decode("utf-8", errors="replace"))
     parser.close()
@@ -470,7 +473,7 @@ def discover_links(
             allowed_domains=allowed_domains,
         )
 
-        if normalized_url is None:
+        if normalized_url is None or normalized_url in excluded:
             continue
 
         if _is_docs_chrome_link(
