@@ -14,10 +14,15 @@ from app.briefing.evidence_packing import EvidenceBundle
 
 MAX_BRIEF_OUTPUT_TOKENS = 700
 
-_SYSTEM_PROMPT = """You produce concise, evidence-grounded technical research briefs.
+_SYSTEM_PROMPT = """You produce concise, evidence-grounded research briefs.
 
+The subject may be any domain. Answer the supplied research intent first.
 Use only the supplied campaign evidence. Do not invent facts, URLs, or source
 document IDs. State uncertainty as an open question.
+
+Prioritize direct evidence that addresses the research intent. Treat author
+biography, site context, or background material as secondary unless it directly
+answers the intent. Do not pad the brief with generic observations.
 
 Return JSON only, with this exact shape:
 
@@ -34,8 +39,8 @@ Return JSON only, with this exact shape:
 }
 
 Requirements:
-- overview must be concise.
-- key_findings must contain at most five items.
+- overview must directly answer or frame the research intent concisely.
+- key_findings must contain at most five actionable, evidence-backed items.
 - every finding must cite at least one supplied document ID.
 - open_questions and recommended_follow_ups must each contain at most five
   strings.

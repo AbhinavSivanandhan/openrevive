@@ -46,6 +46,9 @@ async def load_campaign_evidence_documents(
                 CrawledDocument.content_sha256,
                 CrawledDocument.title,
                 CrawledDocument.extracted_text,
+                CrawlJob.depth,
+                CrawlJob.priority_score,
+                CrawlJob.priority_band,
             )
             .join(
                 CrawlJob,
@@ -66,6 +69,9 @@ async def load_campaign_evidence_documents(
             content_sha256=content_sha256,
             title=title,
             extracted_text=extracted_text,
+            depth=depth,
+            priority_score=priority_score,
+            priority_band=priority_band,
         )
         for (
             document_id,
@@ -73,6 +79,9 @@ async def load_campaign_evidence_documents(
             content_sha256,
             title,
             extracted_text,
+            depth,
+            priority_score,
+            priority_band,
         ) in rows
     ]
 

@@ -137,3 +137,92 @@ def test_bundle_ignores_empty_document_text() -> None:
     assert bundle.included_document_ids == (
         UUID("00000000-0000-0000-0000-000000000003"),
     )
+
+
+def test_bundle_prioritizes_seed_selected_evidence_and_late_passages() -> None:
+    seed = EvidenceDocument(
+        id=UUID("00000000-0000-0000-0000-000000000001"),
+        source_url="https://example.com/resume-tips",
+        content_sha256="a" * 64,
+        title="Resume tips for technical job applications",
+        extracted_text=(
+            "General author background. "
+            + ("Unrelated setup material. " * 250)
+            + "Resume bullets should quantify scope, action, and outcomes. "
+            "Tailor truthful keywords to the target role."
+        ),
+        depth=0,
+    )
+    selected_context = EvidenceDocument(
+        id=UUID("00000000-0000-0000-0000-000000000002"),
+        source_url="https://example.com/contact",
+        content_sha256="b" * 64,
+        title="Professional contact information",
+        extracted_text=(
+            "The author provides LinkedIn and contact details for "
+            "professional follow-up."
+        ),
+        depth=1,
+        priority_band="SELECTED",
+    )
+    duplicate_context = EvidenceDocument(
+        id=UUID("00000000-0000-0000-0000-000000000003"),
+        source_url="https://example.com/contact-copy",
+        content_sha256="b" * 64,
+        title="Mirrored contact information",
+        extracted_text=selected_context.extracted_text,
+        depth=1,
+        priority_band="SELECTED",
+    )
+
+    bundle = build_evidence_bundle(
+        documents=[
+            duplicate_context,
+            selected_context,
+            seed,
+        ],
+        research_intent="resume tips and LinkedIn context",
+        model_id="amazon.nova-micro-v1:0",
+    )
+
+    assert bundle.included_document_ids[0] == seed.id
+    assert selected_context.id in bundle.included_document_ids
+    assert duplicate_context.id not in bundle.included_document_ids
+    assert "quantify scope, action, and outcomes" in bundle.evidence_text
+    assert bundle.input_character_count <= MAX_EVIDENCE_CHARACTERS
+
+
+def test_bundle_allocates_more_context_to_higher_ranked_evidence() -> None:
+    seed = EvidenceDocument(
+        id=UUID("00000000-0000-0000-0000-000000000010"),
+        source_url="https://example.com/migration-guide",
+        content_sha256="c" * 64,
+        title="Database migration guide",
+        extracted_text=(
+            "Migration guidance recommends validating backups before rollout. "
+            * 400
+        ),
+        depth=0,
+    )
+    supporting = EvidenceDocument(
+        id=UUID("00000000-0000-0000-0000-000000000011"),
+        source_url="https://example.com/operations",
+        content_sha256="d" * 64,
+        title="Supporting operational notes",
+        extracted_text=("Operational detail. " * 800),
+        depth=1,
+        priority_band="SELECTED",
+    )
+
+    bundle = build_evidence_bundle(
+        documents=[supporting, seed],
+        research_intent="database migration guide",
+        model_id="amazon.nova-micro-v1:0",
+    )
+
+    seed_card, supporting_card = bundle.evidence_text.split(
+        "[D02]",
+        maxsplit=1,
+    )
+
+    assert len(seed_card) > len(supporting_card)
