@@ -4,12 +4,15 @@ import pytest
 
 from app.briefing.bedrock_brief_generator import (
     MAX_BRIEF_OUTPUT_TOKENS,
+    MAX_MAP_REDUCE_MODEL_CALLS,
     BriefGenerationError,
     generate_campaign_brief,
+    generate_campaign_brief_from_plan,
 )
 from app.briefing.evidence_packing import (
     EvidenceDocument,
     build_evidence_bundle,
+    build_evidence_plan,
 )
 
 
@@ -160,3 +163,114 @@ async def test_generator_rejects_unknown_source_document_ids() -> None:
             region_name="ap-south-1",
             client_factory=lambda _: FakeBedrockClient(),
         )
+
+
+@pytest.mark.anyio
+async def test_generator_runs_bounded_map_reduce_for_large_evidence() -> None:
+    import json
+    import re
+
+    documents = [
+        EvidenceDocument(
+            id=UUID(
+                f"00000000-0000-0000-0000-{number:012d}"
+            ),
+            source_url=(
+                f"https://docs.example.com/source-{number}"
+            ),
+            content_sha256=f"{number:064x}",
+            title=f"Research source {number}",
+            extracted_text=(
+                f"Source {number} provides evidence for the research "
+                "question. " * 800
+            ),
+            depth=0 if number == 1 else 1,
+            priority_band=(
+                "LOW" if number == 1 else "SELECTED"
+            ),
+        )
+        for number in range(1, 17)
+    ]
+
+    plan = build_evidence_plan(
+        documents=documents,
+        research_intent="research question",
+        model_id="apac.amazon.nova-micro-v1:0",
+    )
+
+    assert plan.uses_map_reduce is True
+
+    class FakeBedrockClient:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        def converse(self, **kwargs: object) -> dict[str, object]:
+            self.calls.append(kwargs)
+            request_text = str(kwargs["messages"])
+            source_ids = re.findall(
+                r"[0-9a-f]{8}-[0-9a-f]{4}-"
+                r"[0-9a-f]{4}-[0-9a-f]{4}-"
+                r"[0-9a-f]{12}",
+                request_text,
+            )
+            assert source_ids
+
+            overview = (
+                "Reduced answer."
+                if "PARTIAL EVIDENCE BRIEFS" in request_text
+                else "Partial evidence answer."
+            )
+
+            return {
+                "output": {
+                    "message": {
+                        "content": [
+                            {
+                                "text": json.dumps(
+                                    {
+                                        "overview": overview,
+                                        "key_findings": [
+                                            {
+                                                "statement": (
+                                                    "Evidence supports "
+                                                    "the research answer."
+                                                ),
+                                                "source_document_ids": [
+                                                    source_ids[0]
+                                                ],
+                                            }
+                                        ],
+                                        "open_questions": [],
+                                        "recommended_follow_ups": [],
+                                    }
+                                )
+                            }
+                        ]
+                    }
+                },
+                "usage": {"outputTokens": 31},
+            }
+
+    client = FakeBedrockClient()
+
+    result = await generate_campaign_brief_from_plan(
+        evidence_plan=plan,
+        model_id="apac.amazon.nova-micro-v1:0",
+        region_name="ap-south-1",
+        client_factory=lambda _: client,
+    )
+
+    expected_call_count = len(plan.map_groups) + 1
+
+    assert len(client.calls) == expected_call_count
+    assert expected_call_count <= MAX_MAP_REDUCE_MODEL_CALLS
+    assert result.output_token_count == expected_call_count * 31
+    assert result.brief_json["overview"] == "Reduced answer."
+    assert result.brief_json["synthesis"] == {
+        "mode": "map_reduce",
+        "model_call_count": expected_call_count,
+    }
+
+    evidence_groups = result.brief_json["evidence_groups"]
+    assert isinstance(evidence_groups, list)
+    assert len(evidence_groups) == len(plan.map_groups)

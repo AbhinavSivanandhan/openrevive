@@ -99,7 +99,7 @@ def test_campaign_brief_endpoint_generates_once_and_returns_cache(
 
     calls: list[object] = []
 
-    async def fake_generate_campaign_brief(**kwargs: object):
+    async def fake_generate_campaign_brief_from_plan(**kwargs: object):
         calls.append(kwargs)
 
         return GeneratedCampaignBrief(
@@ -122,8 +122,8 @@ def test_campaign_brief_endpoint_generates_once_and_returns_cache(
         )
 
     monkeypatch.setattr(
-        "app.api.routers.crawl_runs.generate_campaign_brief",
-        fake_generate_campaign_brief,
+        "app.api.routers.crawl_runs.generate_campaign_brief_from_plan",
+        fake_generate_campaign_brief_from_plan,
     )
 
     route = (
@@ -157,7 +157,7 @@ def test_failed_campaign_brief_retries_only_on_a_later_post(
 
     calls: list[object] = []
 
-    async def fake_generate_campaign_brief(**kwargs: object):
+    async def fake_generate_campaign_brief_from_plan(**kwargs: object):
         calls.append(kwargs)
 
         if len(calls) == 1:
@@ -179,8 +179,8 @@ def test_failed_campaign_brief_retries_only_on_a_later_post(
         )
 
     monkeypatch.setattr(
-        "app.api.routers.crawl_runs.generate_campaign_brief",
-        fake_generate_campaign_brief,
+        "app.api.routers.crawl_runs.generate_campaign_brief_from_plan",
+        fake_generate_campaign_brief_from_plan,
     )
 
     route = (

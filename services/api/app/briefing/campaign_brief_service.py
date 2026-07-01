@@ -9,9 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.briefing.evidence_packing import (
     PROMPT_VERSION,
-    EvidenceBundle,
     EvidenceDocument,
-    build_evidence_bundle,
+    EvidencePlan,
+    build_evidence_plan,
 )
 from app.models.campaign_brief import CampaignBrief
 from app.models.crawled_document import CrawledDocument
@@ -29,7 +29,7 @@ class NoUsableCampaignEvidenceError(ValueError):
 @dataclass(frozen=True, slots=True)
 class CampaignBriefReservation:
     brief: CampaignBrief
-    evidence_bundle: EvidenceBundle
+    evidence_plan: EvidencePlan
     created: bool
 
 
@@ -104,14 +104,14 @@ async def reserve_campaign_brief(
         crawl_run_id=crawl_run.id,
     )
 
-    evidence_bundle = build_evidence_bundle(
+    evidence_plan = build_evidence_plan(
         documents=documents,
         research_intent=crawl_run.research_intent,
         model_id=model_id,
         prompt_version=PROMPT_VERSION,
     )
 
-    if evidence_bundle.input_document_count == 0:
+    if evidence_plan.input_document_count == 0:
         raise NoUsableCampaignEvidenceError(
             "campaign has no persisted extracted text to brief"
         )
@@ -120,15 +120,15 @@ async def reserve_campaign_brief(
         insert(CampaignBrief)
         .values(
             crawl_run_id=crawl_run.id,
-            corpus_fingerprint=evidence_bundle.corpus_fingerprint,
+            corpus_fingerprint=evidence_plan.corpus_fingerprint,
             model_id=model_id,
             prompt_version=PROMPT_VERSION,
             status="GENERATING",
             input_document_count=(
-                evidence_bundle.input_document_count
+                evidence_plan.input_document_count
             ),
             input_character_count=(
-                evidence_bundle.input_character_count
+                evidence_plan.input_character_count
             ),
         )
         .on_conflict_do_nothing(
@@ -150,7 +150,7 @@ async def reserve_campaign_brief(
 
         return CampaignBriefReservation(
             brief=brief,
-            evidence_bundle=evidence_bundle,
+            evidence_plan=evidence_plan,
             created=True,
         )
 
@@ -158,7 +158,7 @@ async def reserve_campaign_brief(
         select(CampaignBrief).where(
             CampaignBrief.crawl_run_id == crawl_run.id,
             CampaignBrief.corpus_fingerprint
-            == evidence_bundle.corpus_fingerprint,
+            == evidence_plan.corpus_fingerprint,
         )
     )
 
@@ -169,7 +169,7 @@ async def reserve_campaign_brief(
 
     return CampaignBriefReservation(
         brief=brief,
-        evidence_bundle=evidence_bundle,
+        evidence_plan=evidence_plan,
         created=False,
     )
 

@@ -13,6 +13,16 @@ MAX_EVIDENCE_CHARACTERS = 24_000
 MIN_CHARACTERS_PER_DOCUMENT = 160
 MAX_CHARACTERS_PER_DOCUMENT = 3_600
 
+# The direct path remains cheap for small corpora. Larger corpora are split
+# into at most four map bundles, leaving one final reducer call for a hard
+# maximum of five Bedrock calls in the next implementation step.
+DIRECT_SYNTHESIS_MAX_EVIDENCE_CHARACTERS = 18_000
+MAX_MAP_GROUPS = 4
+MAX_MAP_GROUP_EVIDENCE_CHARACTERS = 12_000
+MAX_TOTAL_MAP_REDUCE_EVIDENCE_CHARACTERS = (
+    MAX_MAP_GROUPS * MAX_MAP_GROUP_EVIDENCE_CHARACTERS
+)
+
 _TOKEN_PATTERN = re.compile(r"[a-z0-9]{2,}")
 _SENTENCE_BOUNDARY_PATTERN = re.compile(r"(?<=[.!?])\s+")
 
@@ -37,6 +47,28 @@ class EvidenceBundle:
     available_document_count: int
     input_document_count: int
     input_character_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class EvidencePlan:
+    """
+    Deterministic synthesis input plan.
+
+    direct_bundle is populated for the one-call path. map_groups is populated
+    for the future map-reduce path. Only one form is active at a time.
+    """
+
+    corpus_fingerprint: str
+    research_intent: str
+    direct_bundle: EvidenceBundle | None
+    map_groups: tuple[EvidenceBundle, ...]
+    available_document_count: int
+    input_document_count: int
+    input_character_count: int
+
+    @property
+    def uses_map_reduce(self) -> bool:
+        return bool(self.map_groups)
 
 
 def _normalize_text(value: str | None) -> str:
@@ -203,6 +235,8 @@ def _excerpt(
 
 def _character_limits(
     ranked_documents: list[tuple[EvidenceDocument, int]],
+    *,
+    max_evidence_characters: int,
 ) -> list[int]:
     if not ranked_documents:
         return []
@@ -212,7 +246,7 @@ def _character_limits(
     )
     text_budget = max(
         0,
-        MAX_EVIDENCE_CHARACTERS - estimated_metadata_characters,
+        max_evidence_characters - estimated_metadata_characters,
     )
     baseline = min(
         MIN_CHARACTERS_PER_DOCUMENT,
@@ -277,6 +311,7 @@ def build_evidence_bundle(
     research_intent: str | None,
     model_id: str,
     prompt_version: str = PROMPT_VERSION,
+    max_evidence_characters: int = MAX_EVIDENCE_CHARACTERS,
 ) -> EvidenceBundle:
     """
     Build one deterministic, relevance-ranked evidence bundle.
@@ -293,6 +328,11 @@ def build_evidence_bundle(
     if not normalized_prompt_version:
         raise ValueError("prompt_version must not be blank")
 
+    if max_evidence_characters <= 0:
+        raise ValueError(
+            "max_evidence_characters must be greater than zero"
+        )
+
     usable_documents = [
         document
         for document in documents
@@ -303,7 +343,10 @@ def build_evidence_bundle(
         documents=usable_documents,
         intent_tokens=intent_tokens,
     )[:MAX_EVIDENCE_DOCUMENTS]
-    character_limits = _character_limits(ranked_documents)
+    character_limits = _character_limits(
+        ranked_documents,
+        max_evidence_characters=max_evidence_characters,
+    )
 
     header = "\n".join(
         [
@@ -343,7 +386,7 @@ def build_evidence_bundle(
         )
         separator = "\n\n"
         available_characters = (
-            MAX_EVIDENCE_CHARACTERS
+            max_evidence_characters
             - total_characters
             - len(separator)
             - len(prefix)
@@ -381,4 +424,199 @@ def build_evidence_bundle(
         available_document_count=len(usable_documents),
         input_document_count=len(included_ids),
         input_character_count=total_characters,
+    )
+
+
+
+def _estimated_document_characters(
+    document: EvidenceDocument,
+) -> int:
+    """
+    Estimate each source's potential useful contribution before prompt cards
+    are built. This is character-based, not URL-count-based.
+    """
+    return min(
+        len(_normalize_text(document.extracted_text)),
+        MAX_CHARACTERS_PER_DOCUMENT,
+    )
+
+
+def _plan_ranked_documents(
+    *,
+    documents: list[EvidenceDocument],
+    research_intent: str | None,
+) -> list[tuple[EvidenceDocument, int]]:
+    usable_documents = [
+        document
+        for document in documents
+        if _normalize_text(document.extracted_text)
+    ]
+
+    return _rank_documents(
+        documents=usable_documents,
+        intent_tokens=_tokens(research_intent),
+    )[:MAX_EVIDENCE_DOCUMENTS]
+
+
+def _within_total_evidence_budget(
+    ranked_documents: list[tuple[EvidenceDocument, int]],
+) -> list[EvidenceDocument]:
+    selected: list[EvidenceDocument] = []
+    used_characters = 0
+
+    for document, _ in ranked_documents:
+        estimated_characters = _estimated_document_characters(document)
+
+        if estimated_characters <= 0:
+            continue
+
+        if (
+            selected
+            and used_characters + estimated_characters
+            > MAX_TOTAL_MAP_REDUCE_EVIDENCE_CHARACTERS
+        ):
+            break
+
+        selected.append(document)
+        used_characters += estimated_characters
+
+        if used_characters >= MAX_TOTAL_MAP_REDUCE_EVIDENCE_CHARACTERS:
+            break
+
+    return selected
+
+
+def _partition_map_groups(
+    documents: list[EvidenceDocument],
+) -> list[list[EvidenceDocument]]:
+    groups: list[list[EvidenceDocument]] = []
+    current_group: list[EvidenceDocument] = []
+    current_group_characters = 0
+
+    for document in documents:
+        estimated_characters = _estimated_document_characters(document)
+
+        if (
+            current_group
+            and current_group_characters + estimated_characters
+            > MAX_MAP_GROUP_EVIDENCE_CHARACTERS
+        ):
+            groups.append(current_group)
+
+            if len(groups) >= MAX_MAP_GROUPS:
+                break
+
+            current_group = []
+            current_group_characters = 0
+
+        current_group.append(document)
+        current_group_characters += estimated_characters
+
+    if current_group and len(groups) < MAX_MAP_GROUPS:
+        groups.append(current_group)
+
+    return groups[:MAX_MAP_GROUPS]
+
+
+def build_evidence_plan(
+    *,
+    documents: list[EvidenceDocument],
+    research_intent: str | None,
+    model_id: str,
+    prompt_version: str = PROMPT_VERSION,
+) -> EvidencePlan:
+    """
+    Decide deterministically whether a corpus needs direct synthesis or a
+    bounded future map-reduce workflow.
+
+    This function performs no model call. The current API remains unchanged
+    until the later orchestration patch consumes EvidencePlan.
+    """
+    normalized_model_id = model_id.strip()
+
+    if not normalized_model_id:
+        raise ValueError("model_id must not be blank")
+
+    normalized_prompt_version = prompt_version.strip()
+
+    if not normalized_prompt_version:
+        raise ValueError("prompt_version must not be blank")
+
+    ranked_documents = _plan_ranked_documents(
+        documents=documents,
+        research_intent=research_intent,
+    )
+    planned_documents = _within_total_evidence_budget(ranked_documents)
+    available_document_count = sum(
+        1
+        for document in documents
+        if _normalize_text(document.extracted_text)
+    )
+    corpus_fingerprint = _fingerprint(
+        documents=documents,
+        research_intent=research_intent,
+        model_id=normalized_model_id,
+        prompt_version=normalized_prompt_version,
+    )
+    estimated_total_characters = sum(
+        _estimated_document_characters(document)
+        for document in planned_documents
+    )
+
+    if (
+        estimated_total_characters
+        <= DIRECT_SYNTHESIS_MAX_EVIDENCE_CHARACTERS
+    ):
+        direct_bundle = build_evidence_bundle(
+            documents=planned_documents,
+            research_intent=research_intent,
+            model_id=normalized_model_id,
+            prompt_version=normalized_prompt_version,
+            max_evidence_characters=(
+                DIRECT_SYNTHESIS_MAX_EVIDENCE_CHARACTERS
+            ),
+        )
+
+        return EvidencePlan(
+            corpus_fingerprint=corpus_fingerprint,
+            research_intent=_normalize_text(research_intent),
+            direct_bundle=direct_bundle,
+            map_groups=(),
+            available_document_count=available_document_count,
+            input_document_count=(
+                direct_bundle.input_document_count
+            ),
+            input_character_count=(
+                direct_bundle.input_character_count
+            ),
+        )
+
+    groups = _partition_map_groups(planned_documents)
+    map_groups = tuple(
+        build_evidence_bundle(
+            documents=group,
+            research_intent=research_intent,
+            model_id=normalized_model_id,
+            prompt_version=normalized_prompt_version,
+            max_evidence_characters=(
+                MAX_MAP_GROUP_EVIDENCE_CHARACTERS
+            ),
+        )
+        for group in groups
+    )
+
+    return EvidencePlan(
+        corpus_fingerprint=corpus_fingerprint,
+        research_intent=_normalize_text(research_intent),
+        direct_bundle=None,
+        map_groups=map_groups,
+        available_document_count=available_document_count,
+        input_document_count=sum(
+            group.input_document_count
+            for group in map_groups
+        ),
+        input_character_count=sum(
+            group.input_character_count
+            for group in map_groups
+        ),
     )

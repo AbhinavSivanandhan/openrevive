@@ -16,7 +16,7 @@ from app.crawler.crawl_run_events import publish_crawl_run_wakeup
 
 from app.briefing.bedrock_brief_generator import (
     BriefGenerationError,
-    generate_campaign_brief,
+    generate_campaign_brief_from_plan,
 )
 from app.briefing.campaign_brief_service import (
     NoUsableCampaignEvidenceError,
@@ -1171,8 +1171,8 @@ async def generate_campaign_brief_for_campaign(
     ).strip()
 
     try:
-        generated = await generate_campaign_brief(
-            evidence_bundle=reservation.evidence_bundle,
+        generated = await generate_campaign_brief_from_plan(
+            evidence_plan=reservation.evidence_plan,
             model_id=brief.model_id,
             region_name=region_name,
         )
