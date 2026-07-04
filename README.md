@@ -211,3 +211,6 @@ The current build is intentionally narrow.
 * The campaign brief is explicit and campaign-scoped. There is no general chat interface, vector retrieval, full-text search, or unrestricted answer-generation layer.
 * The deployed demo uses Basic Auth as a private-access gate. It does not provide accounts, memberships, tenant isolation, or production authorization.
 * The ALB path is demo-grade HTTP infrastructure. A production deployment needs custom-domain TLS, HTTPS-only ingress, stronger identity, monitoring, and abuse controls.
+
+
+Demo Video : https://www.loom.com/share/9fbaf8f0898d42ceaa99a1b8bd708c11
