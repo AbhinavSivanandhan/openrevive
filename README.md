@@ -1,69 +1,88 @@
 # OpenRevive
 
-OpenRevive is a crawl-first research workspace for running bounded web research campaigns and retaining the resulting evidence.
+OpenRevive is a crawler-first, evidence-grounded research workspace. It turns one approved root URL and a concrete research intent into a bounded campaign with a durable URL frontier, captured source documents, and an explicit source-linked AI brief.
 
-A user creates a workspace, groups work into collections, starts a campaign from approved seed URLs, watches the durable crawl frontier update live, and reads the captured documents after the run completes.
-
-The deployed system is deliberately split into a control plane and a worker data plane:
+It is not a web-scale crawler, a general chat product, or a complete knowledge-archive platform. The current implementation is a small, inspectable research workflow: campaign intent is durable, crawling runs outside request handlers, raw evidence is retained, and every AI finding links back to a captured document.
 
 ```text
-Vercel / Next.js UI
+Campaign name + root URL + research intent
         |
         v
-AWS ALB -> ECS Fargate API -> Aurora PostgreSQL
-                            |
-                            +-> SQS -> EventBridge Pipe -> one-shot Fargate worker
-                                                              |
-                                                              +-> S3 raw artifacts
+durable CrawlRun + initial CrawlJob in PostgreSQL
+        |
+        v
+SQS wake-up -> EventBridge Pipe -> finite crawler worker
+        |
+        +--> bounded HTTP fetch + domain pacing
+        +--> raw artifact in MinIO / S3
+        +--> extracted document and frontier state in PostgreSQL
+        |
+        v
+Nova Micro frontier selection and explicit campaign brief
+        |
+        v
+campaign workspace: frontier, documents, source-linked findings
 ```
 
-The API records durable campaign intent. It does not crawl pages synchronously. Starting or resuming a campaign publishes a wake-up event to SQS; EventBridge Pipes launches a worker task; the worker claims PostgreSQL-backed jobs, fetches pages, discovers in-scope links, writes raw evidence to S3, persists extracted documents, and exits after it drains work.
+## What exists today
 
-## What it demonstrates
+* A browser control plane that creates and starts a campaign, then opens its dedicated workspace.
+* Durable `Workspace`, `Collection`, `CrawlRun`, `CrawlJob`, `CrawledDocument`, `CrawlDomainPolicy`, `WorkerHeartbeat`, and `CampaignBrief` state in PostgreSQL.
+* Bounded HTTP/HTTPS campaigns with approved-domain scope, maximum page count, maximum depth, request timeout, and retry budget.
+* PostgreSQL job leases with expiry and stale-worker protection.
+* Global hostname pacing: at most one active request per hostname, followed by a default one-second cooldown after completion or failure.
+* URL normalization and campaign-scoped deduplication.
+* Root-page link discovery, deterministic in-scope filtering, and metadata-only Nova Micro selection of a small child frontier.
+* Raw page artifacts in MinIO locally or Amazon S3 in AWS, with lightweight HTML title/text extraction in PostgreSQL.
+* An explicit campaign brief action after a campaign reaches `SUCCEEDED` or `PARTIALLY_SUCCEEDED`.
+* Bounded Nova Micro synthesis with validated source references, fingerprinted caching, and direct or map-reduce execution.
+* Local Docker Compose development and an AWS demo deployment using Vercel, ECS Fargate, Aurora PostgreSQL Serverless v2, SQS, EventBridge Pipes, S3, ECR, CloudWatch, Terraform, and Basic Auth.
 
-- Durable campaign, crawl-run, crawl-job, and document state.
-- PostgreSQL leasing with expiry and safe recovery of abandoned work.
-- Bounded crawling by seed URL, domain allow-list, maximum depth, maximum page count, request timeout, and retry budget.
-- Link discovery and prioritised frontier expansion.
-- Persisted raw artifacts in S3 and extracted text in PostgreSQL.
-- Live campaign status, frontier state, and document evidence in a Next.js UI.
-- Event-driven worker orchestration through SQS and EventBridge Pipes.
-- On-demand ECS Fargate workers that drain work and exit instead of remaining permanently active.
-- Repeatable deployment checks and end-to-end infrastructure smoke tests.
+## What this repository demonstrates
+
+| Concern            | Current implementation                                                                                                                  |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
+| Control plane      | FastAPI creates durable campaign intent and never waits for web crawling in the request handler.                                        |
+| Durable frontier   | `crawl_jobs` stores every URL-sized work item, retry state, provenance, priority, and fetch metadata.                                   |
+| Distributed safety | PostgreSQL row locks, job leases, and shared domain reservations coordinate concurrent workers.                                         |
+| Politeness         | One active request per hostname and a cooldown after completion; `robots.txt` is not yet fetched or enforced.                           |
+| Evidence           | Raw response bytes are written to object storage; extracted title/text and source metadata are persisted in PostgreSQL.                 |
+| AI boundaries      | The model selects only pre-approved candidate IDs and briefs only persisted campaign evidence with validated citations.                 |
+| Operations         | Finite cloud workers drain work and exit; verification, inventory, cost, stop, teardown, and destructive cleanup commands are explicit. |
 
 ## Technology stack
 
-| Area | Technology |
-| --- | --- |
-| Frontend | Next.js 16, React 19, TypeScript, Tailwind |
-| API / control plane | Python 3.14, FastAPI, Pydantic Settings |
-| Data access | SQLAlchemy async, asyncpg, Alembic |
-| Durable state | PostgreSQL locally; Aurora PostgreSQL Serverless v2 in AWS |
-| Local object storage | MinIO |
-| Production object storage | Amazon S3 |
-| Local development | Docker Compose |
-| Production API | Amazon ECS Fargate behind an Application Load Balancer |
-| Worker trigger | Amazon SQS and EventBridge Pipes |
-| Container registry | Amazon ECR |
-| Logs | Amazon CloudWatch Logs |
-| Frontend hosting | Vercel |
-| Infrastructure | Terraform and shell lifecycle commands |
+| Area                        | Technology                                                 |
+| --------------------------- | ---------------------------------------------------------- |
+| Frontend                    | Next.js 16, React 19, TypeScript, Tailwind                 |
+| API / control plane         | Python 3.14, FastAPI, Pydantic Settings                    |
+| Data access                 | SQLAlchemy async, asyncpg, Alembic                         |
+| Durable state               | PostgreSQL locally; Aurora PostgreSQL Serverless v2 in AWS |
+| Local object storage        | MinIO                                                      |
+| Production object storage   | Amazon S3                                                  |
+| Model calls                 | Amazon Bedrock, Amazon Nova Micro                          |
+| Local development           | Docker Compose                                             |
+| Production compute          | Amazon ECS Fargate behind an Application Load Balancer     |
+| Worker trigger              | Amazon SQS and EventBridge Pipes                           |
+| Container registry and logs | Amazon ECR and CloudWatch Logs                             |
+| Frontend hosting            | Vercel                                                     |
+| Infrastructure              | Terraform and shell lifecycle commands                     |
 
 ## Repository layout
 
 ```text
-apps/web/              Next.js campaign workspace UI
-services/api/          FastAPI API, ORM models, migrations, crawler worker
+apps/web/              Next.js campaign control plane, library, workspace, and document reader
+services/api/          FastAPI routes, ORM models, migrations, crawler, and Bedrock workflows
 compose.yaml           Local Docker Compose development stack
-infra/foundation/      AWS VPC, Aurora, S3, ECR, SQS, IAM, budget
-infra/runtime/         ALB, ECS API service, task definitions, EventBridge Pipe
-infra/scripts/         Cloud lifecycle, verification, inventory, and cost commands
-docs/                  Architecture, operations, user flows, and Mac setup
+infra/foundation/      VPC, Aurora, S3, ECR, SQS, IAM, secrets, and budget resources
+infra/runtime/         ALB, ECS API, migration/worker tasks, CloudWatch, and EventBridge Pipe
+infra/scripts/         Cloud lifecycle, verification, inventory, cost, and auth bootstrap commands
+docs/                  Architecture, operations, setup, and product-flow documentation
 ```
 
 ## Quick local start
 
-Prerequisites are Docker Desktop, Git, Node/pnpm, Python/uv, and standard command-line tools.
+Prerequisites are Docker Desktop, Git, Node/pnpm, Python/uv, and standard command-line tools. Terraform, AWS CLI, and the Vercel CLI are needed only for the cloud deployment path.
 
 ```bash
 git clone <repository-url>
@@ -72,6 +91,23 @@ cd openrevive
 make setup
 make verify
 make dev-up
+```
+
+`make dev-up` keeps Compose logs attached to the terminal. In a second terminal, apply the current schema before using the UI:
+
+```bash
+docker compose exec api \
+  sh -lc 'uv run --frozen alembic upgrade head'
+```
+
+Verify the local stack:
+
+```bash
+make dev-ps
+
+curl -fsS http://localhost:8000/health
+curl -fsS http://localhost:8000/health/ready
+curl -fsS http://localhost:3000/api/health/ready
 ```
 
 Open:
@@ -89,27 +125,34 @@ Stop the local stack while preserving Docker volumes:
 make dev-down
 ```
 
-Remove local containers and volumes when data is disposable:
+Remove local containers and volumes when the data is disposable:
 
 ```bash
 make dev-reset
 ```
 
-See `docs/LOCAL_SETUP_MACOS.md` for the full first-time MacBook setup.
-
 ## Local development commands
 
 ```bash
-make setup       # install or verify local development tooling
-make verify      # verify Docker, Node, pnpm, uv, Terraform, AWS CLI, etc.
-make dev-up      # build and run the local Compose stack
-make dev-down    # stop local containers, preserve volumes
+make setup       # bootstrap or verify Mac development tooling
+make verify      # verify Docker, Node, pnpm, uv, Terraform, AWS CLI, and related tools
+make dev-up      # build and run the local Compose stack in the foreground
+make dev-down    # stop local containers and preserve volumes
 make dev-reset   # delete local containers and volumes
 make dev-logs    # follow local logs
 make dev-ps      # show local service status
 ```
 
-The local stack includes Next.js, FastAPI, PostgreSQL, one continuously polling crawler worker, MinIO, and Redis. Redis is available for future extensions but is not on the active crawl execution path.
+The local stack includes Next.js, FastAPI, PostgreSQL, one continuously polling crawler worker, MinIO, and Redis. Redis is available for future extensions and is not on the active crawl execution path.
+
+## Run tests
+
+The backend tests use the dedicated Compose test database:
+
+```bash
+docker compose exec api \
+  sh -lc 'DATABASE_URL="$TEST_DATABASE_URL" uv run --frozen pytest -q'
+```
 
 ## AWS deployment commands
 
@@ -125,11 +168,11 @@ make cloud-down
 CONFIRM=DELETE_DEMO_DATA make cloud-nuke
 ```
 
-`cloud-up` applies the AWS foundation, builds and publishes the container image, runs Alembic migrations through an ECS task, starts the API service, and verifies API health.
+`cloud-up` applies the foundation layer, creates or refreshes private-access credentials, builds and publishes an ARM64 container image, applies runtime infrastructure, runs Alembic through a finite ECS migration task, starts the API service, and checks `/health`.
 
-`cloud-down` removes runtime compute and load-balancing resources while retaining foundation resources such as Aurora, S3, ECR, SQS, IAM, and the budget.
+`cloud-down` removes runtime compute and networking while retaining foundation resources such as Aurora, S3, ECR, SQS, IAM, VPC networking, and the budget.
 
-`cloud-nuke` is deliberately destructive. It removes the entire demo environment and its data only when `CONFIRM=DELETE_DEMO_DATA` is supplied.
+`cloud-nuke` is deliberately destructive. It removes the complete demo environment and its data only when `CONFIRM=DELETE_DEMO_DATA` is supplied.
 
 ## Verification commands
 
@@ -140,30 +183,31 @@ make cloud-inventory
 make cloud-costs
 ```
 
-- `cloud-check` is read-only. It verifies API health, ECS capacity, Aurora, EventBridge Pipe state, SQS, S3 lifecycle, ECR image availability, AWS Budget configuration, and optionally the Vercel API proxy.
-- `cloud-smoke` first runs `cloud-check`, then creates a one-page campaign and proves the complete path: API -> Aurora -> SQS -> Pipe -> Fargate worker -> S3 -> Aurora.
-- `cloud-inventory` lists AWS resources tagged for the OpenRevive demo.
-- `cloud-costs` reports current-month account costs by service. Cost Explorer is delayed and is informational rather than a real-time cost guard.
+* `cloud-check` is read-only. It checks API health, ECS API capacity, Aurora, EventBridge Pipe state, SQS, S3 lifecycle, ECR image availability, AWS Budget configuration, and optionally the authenticated Vercel proxy.
+* `cloud-smoke` creates a one-page campaign and proves the deployed crawl path: API → Aurora → SQS → EventBridge Pipe → Fargate worker → external fetch → S3 → Aurora.
+* `cloud-inventory` lists AWS resources tagged for the OpenRevive demo.
+* `cloud-costs` reports Cost Explorer data by service. It is informational and delayed, not a real-time cost guard.
 
 ## Documentation map
 
-| Document | Purpose |
-| --- | --- |
-| `docs/ARCHITECTURE.md` | Durable model, event-driven execution path, AWS topology, correctness boundaries |
-| `docs/OPERATIONS.md` | Cloud lifecycle, smoke tests, logs, troubleshooting, teardown |
-| `docs/USER_FLOW_AND_USE_CASES.md` | Product workflow, personas, and example campaigns |
-| `docs/LOCAL_SETUP_MACOS.md` | Clone-to-running local setup on a MacBook |
-| `infra/README.md` | Concise infrastructure-specific command reference |
+| Document                                                             | Purpose                                                                                               |
+| -------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)                       | Data flow, schema, leases, domain pacing, Bedrock behavior, AWS topology, and correctness boundaries. |
+| [`docs/LOCAL_SETUP_MACOS.md`](docs/LOCAL_SETUP_MACOS.md)             | Clone-to-running local setup, migrations, tests, and local troubleshooting.                           |
+| [`docs/OPERATIONS.md`](docs/OPERATIONS.md)                           | Cloud lifecycle, verification, Basic Auth, troubleshooting, cost controls, and teardown.              |
+| [`docs/USER_FLOW_AND_USE_CASES.md`](docs/USER_FLOW_AND_USE_CASES.md) | Current browser workflow, campaign workspace behavior, and suitable bounded research use cases.       |
+| [`infra/README.md`](infra/README.md)                                 | Concise AWS infrastructure reference.                                                                 |
 
 ## Current boundaries
 
-OpenRevive is a working crawler and research-campaign control plane, not yet a finished general-purpose research product. Current deliberate boundaries include:
+The current build is intentionally narrow.
 
-- No browser JavaScript rendering.
-- No robots.txt enforcement or per-domain politeness controls.
-- No authentication, memberships, or tenant isolation.
-- No full-text search, vector retrieval, or answer-generation layer.
-- No hard global worker-concurrency cap beyond bounded campaign work and the deployment’s cost controls.
-- No production-grade TLS/custom-domain setup for the demo ALB path.
-
-These are deliberate next-stage concerns, not hidden assumptions in the current crawler model.
+* The browser control plane accepts one root URL; its hostname becomes the UI’s allowed-domain scope. The underlying API supports multiple seeds and domains.
+* The active HTML discovery path runs only for depth-zero seed jobs. `max_depth` is stored and enforced when child jobs are enqueued, but the worker does not currently recurse from depth-one pages.
+* The default UI profile is 50 pages, depth 2, 20-second requests, and two attempts. API validation allows larger bounded values, but this is not a web-scale product.
+* Workers process one job lifecycle at a time. Parallelism comes from multiple workers and distinct domains; there is no application-level global worker cap or high-throughput scheduler.
+* Domain policy is implemented, but `robots.txt` is not fetched, parsed, or enforced. Existing robots metadata columns are reserved for future work.
+* HTML extraction is lightweight. There is no browser JavaScript rendering, PDF pipeline, OCR, image understanding, or authenticated-site connector.
+* The campaign brief is explicit and campaign-scoped. There is no general chat interface, vector retrieval, full-text search, or unrestricted answer-generation layer.
+* The deployed demo uses Basic Auth as a private-access gate. It does not provide accounts, memberships, tenant isolation, or production authorization.
+* The ALB path is demo-grade HTTP infrastructure. A production deployment needs custom-domain TLS, HTTPS-only ingress, stronger identity, monitoring, and abuse controls.
