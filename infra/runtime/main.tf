@@ -136,11 +136,11 @@ resource "aws_ecs_task_definition" "api" {
       secrets = [
         {
           name      = "BASIC_AUTH_USERNAME"
-          valueFrom = "${data.aws_secretsmanager_secret.basic_auth.arn}:username::"
+          valueFrom = "${var.basic_auth_secret_arn}:username::"
         },
         {
           name      = "BASIC_AUTH_PASSWORD"
-          valueFrom = "${data.aws_secretsmanager_secret.basic_auth.arn}:password::"
+          valueFrom = "${var.basic_auth_secret_arn}:password::"
         }
       ]
 
@@ -373,8 +373,4 @@ resource "aws_pipes_pipe" "crawl_wakeup" {
   }
 
   depends_on = [aws_iam_role_policy.pipe]
-}
-
-data "aws_secretsmanager_secret" "basic_auth" {
-  name = "${local.name}-basic-auth"
 }

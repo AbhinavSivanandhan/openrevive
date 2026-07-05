@@ -25,7 +25,7 @@ verify:
 	./scripts/verify-dev-env.sh
 
 # OpenRevive AWS lifecycle
-.PHONY: cloud-up cloud-status cloud-logs cloud-stop cloud-resume cloud-kill cloud-down cloud-nuke
+.PHONY: cloud-up cloud-status cloud-logs cloud-stop cloud-resume cloud-kill cloud-down cloud-nuke cloud-runtime-recover
 
 cloud-up:
 	./infra/scripts/cloud-up.sh
@@ -50,6 +50,9 @@ cloud-down:
 
 cloud-nuke:
 	./infra/scripts/cloud-nuke.sh
+
+cloud-runtime-recover:
+	./infra/scripts/cloud-runtime-recover.sh
 
 .PHONY: cloud-check
 

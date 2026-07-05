@@ -70,3 +70,9 @@ variable "crawl_event_queue_url" {
 variable "crawl_event_queue_arn" {
   type = string
 }
+
+# The secret is created by the foundation layer. Passing its ARN through the
+# generated runtime variables avoids a runtime data-source read during destroy.
+variable "basic_auth_secret_arn" {
+  type = string
+}
